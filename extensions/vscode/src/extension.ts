@@ -8,6 +8,9 @@ import * as vscode from "vscode";
 export { default as buildTimestamp } from "./.buildTimestamp";
 
 async function dynamicImportAndActivate(context: vscode.ExtensionContext) {
+  // TEMP FIX: Disable TLS verification for self-signed internal cert
+  // TODO: Remove once proper CA or upstream fix is available
+  process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
   await setupCa();
   const { activateExtension } = await import("./activation/activate");
   return await activateExtension(context);

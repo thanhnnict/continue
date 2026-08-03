@@ -227,12 +227,23 @@ async function describeImage(
   }
 
   try {
+    // Allow self-signed certificates for on-prem/internal VLM endpoints
+    const prevTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
+
     const response = await fetch(url, {
       method: "POST",
       headers,
       body: JSON.stringify(requestBody),
       signal: controller.signal,
     });
+
+    // Restore original setting
+    if (prevTlsSetting !== undefined) {
+      process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTlsSetting;
+    } else {
+      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
+    }
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");

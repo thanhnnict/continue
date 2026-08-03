@@ -713,6 +713,26 @@ export interface LLMOptions {
 
   /** Tool overrides for this model */
   toolOverrides?: ToolOverride[];
+
+  /** Vision proxy — route images through a VLM before sending to this model */
+  visionProxy?: {
+    /** VLM endpoint (OpenAI-compatible), e.g. http://171.232.252.166:7002/v1 */
+    endpoint: string;
+    /** VLM model name, e.g. Qwen/Qwen2.5-VL-32B-Instruct */
+    model: string;
+    /** API key for VLM endpoint */
+    apiKey?: string;
+    /** Max tokens for VLM description response (default: 2048) */
+    maxTokens?: number;
+    /** Prompt template: "code" | "ui" | "diagram" | "auto" | custom string */
+    promptTemplate?: string;
+    /** Temperature for VLM (default: 0.2) */
+    temperature?: number;
+    /** Request timeout in ms (default: 30000) */
+    timeout?: number;
+    /** Enable/disable (default: true) */
+    enabled?: boolean;
+  };
 }
 
 type RequireAtLeastOne<T, Keys extends keyof T = keyof T> = Pick<

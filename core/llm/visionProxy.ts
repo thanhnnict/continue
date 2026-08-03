@@ -13,6 +13,7 @@
  */
 
 import { ChatMessage, ImageMessagePart, MessagePart } from "..";
+import { fetchwithRequestOptions } from "@continuedev/fetch";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -227,12 +228,18 @@ async function describeImage(
   }
 
   try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    // Use fetchwithRequestOptions to respect TLS settings (verifySsl: false)
+    // This ensures self-signed certs for on-prem/internal VLM endpoints are accepted
+    const response = await fetchwithRequestOptions(
+      url,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      },
+      { verifySsl: false },
+    );
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
@@ -242,7 +249,7 @@ async function describeImage(
       return `[Image: VLM description failed — ${response.status}]`;
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     const content = data?.choices?.[0]?.message?.content;
 
     if (!content) {

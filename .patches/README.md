@@ -10,12 +10,13 @@ These patches are required for production deployment serving ~300+ developer use
 
 ## Patches Applied
 
-| #   | File                                            | Issue          | Description                                                               |
-| --- | ----------------------------------------------- | -------------- | ------------------------------------------------------------------------- |
-| 1   | `packages/openai-adapters/src/apis/OpenAI.ts`   | Empty response | Retry without tools when server returns `content:null` + `tool_calls:[]`  |
-| 2   | `core/llm/openaiTypeConverters.ts`              | Malformed JSON | Sanitize tool_calls arguments before sending back in conversation history |
-| 3   | —                                               | Upstream sync  | Strategy document (no code change)                                        |
-| 4   | `core/llm/visionProxy.ts` + `core/llm/index.ts` | Image support  | Vision proxy — route images through VLM for text-only LLMs                |
+| # | File | Issue | Description |
+|---|------|-------|-------------|
+| 1 | `packages/openai-adapters/src/apis/OpenAI.ts` | Empty response | Retry without tools when server returns `content:null` + `tool_calls:[]` |
+| 2 | `core/llm/openaiTypeConverters.ts` | Malformed JSON | Sanitize tool_calls arguments before sending back in conversation history |
+| 3 | — | Upstream sync | Strategy document (no code change) |
+| 4 | `core/llm/visionProxy.ts` | Image support | Vision proxy — route images through VLM for text-only LLMs |
+| 5 | `extensions/vscode/src/extension.ts` | TLS self-signed | `NODE_TLS_REJECT_UNAUTHORIZED=0` at activation — allows self-signed certs |
 
 ---
 

@@ -87,13 +87,17 @@ models:
 
 ### Prompt Templates
 
-| Template      | Best for                          |
-| ------------- | --------------------------------- |
-| `code`        | Code screenshots, terminal output |
-| `ui`          | UI/UX screenshots, web pages      |
-| `diagram`     | Architecture diagrams, flowcharts |
-| `auto`        | General-purpose (default)         |
-| Custom string | Your own prompt                   |
+| Template      | Best for                                      |
+| ------------- | --------------------------------------------- |
+| `code`        | **OCR mode** — extracts ONLY code, ignores UI |
+| `config`      | **OCR mode** — extracts ONLY config (YAML/JSON) |
+| `error`       | **OCR mode** — extracts ONLY error messages   |
+| `ui`          | UI/UX screenshots, web pages                  |
+| `diagram`     | Architecture diagrams, flowcharts              |
+| `auto`        | General-purpose — prioritizes code (default)  |
+| Custom string | Your own prompt                               |
+
+**OCR templates** (`code`, `config`, `error`) are strict — they output ONLY the content, no descriptions, no markdown formatting. Use these when you want the main LLM to see exactly what's on screen without VLM commentary.
 
 ---
 
@@ -160,7 +164,7 @@ grep -n "visionProxy" core/index.d.ts
 ## Future Improvements
 
 1. **Parallel image processing**: Process multiple images concurrently
-2. **Caching**: Cache VLM descriptions for repeated images (same base64)
+2. ~~**Caching**: Cache VLM descriptions for repeated images (same base64)~~ ✅ **DONE** — 5-min TTL cache
 3. **Streaming VLM**: Stream description for faster TTFT perception
 4. **Smart routing**: Auto-detect image type → select best prompt template
 5. **Fallback chain**: If primary VLM fails → try backup VLM → then fallback text

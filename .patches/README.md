@@ -10,10 +10,12 @@ These patches are required for production deployment serving ~300+ developer use
 
 ## Patches Applied
 
-| # | File | Issue | Description |
-|---|------|-------|-------------|
-| 1 | `packages/openai-adapters/src/apis/OpenAI.ts` | Empty response | Retry without tools when server returns `content:null` + `tool_calls:[]` |
-| 2 | `core/llm/openaiTypeConverters.ts` | Malformed JSON | Sanitize tool_calls arguments before sending back in conversation history |
+| #   | File                                            | Issue          | Description                                                               |
+| --- | ----------------------------------------------- | -------------- | ------------------------------------------------------------------------- |
+| 1   | `packages/openai-adapters/src/apis/OpenAI.ts`   | Empty response | Retry without tools when server returns `content:null` + `tool_calls:[]`  |
+| 2   | `core/llm/openaiTypeConverters.ts`              | Malformed JSON | Sanitize tool_calls arguments before sending back in conversation history |
+| 3   | —                                               | Upstream sync  | Strategy document (no code change)                                        |
+| 4   | `core/llm/visionProxy.ts` + `core/llm/index.ts` | Image support  | Vision proxy — route images through VLM for text-only LLMs                |
 
 ---
 
@@ -43,9 +45,14 @@ code --install-extension extensions/vscode/build/continue-darwin-arm64-2.0.0.vsi
 grep -c "Retry without tools" packages/openai-adapters/src/apis/OpenAI.ts
 # Expected: 1
 
-# Check patch 2  
+# Check patch 2
 grep -c "Sanitize arguments" core/llm/openaiTypeConverters.ts
 # Expected: 1
+
+# Check patch 4
+grep -c "Vision Proxy" core/llm/index.ts
+# Expected: 1
+test -f core/llm/visionProxy.ts && echo "visionProxy.ts exists"
 ```
 
 ---
@@ -55,4 +62,4 @@ grep -c "Sanitize arguments" core/llm/openaiTypeConverters.ts
 - `01-nim-empty-response-retry.md` — Full details on patch #1
 - `02-tool-arguments-json-sanitize.md` — Full details on patch #2
 - `03-upstream-sync-strategy.md` — How to keep in sync with upstream
-
+- `04-vision-proxy.md` — Full details on patch #4

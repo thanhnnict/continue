@@ -1,9 +1,18 @@
 const { exec } = require("child_process");
 const fs = require("fs");
 
-const version = JSON.parse(
+const pkg = JSON.parse(
   fs.readFileSync("./package.json", { encoding: "utf-8" }),
-).version;
+);
+const version = pkg.version;
+
+// Auto-update displayName with current version for custom builds
+const customDisplayName = `Continue OnPrem — AI code agent (custom v${version})`;
+if (pkg.displayName !== customDisplayName) {
+  pkg.displayName = customDisplayName;
+  fs.writeFileSync("./package.json", JSON.stringify(pkg, null, 2) + "\n");
+  console.log(`[custom] Updated displayName → "${customDisplayName}"`);
+}
 
 const args = process.argv.slice(2);
 let target;

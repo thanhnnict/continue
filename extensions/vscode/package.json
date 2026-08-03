@@ -2,7 +2,7 @@
   "name": "continue",
   "icon": "media/icon.png",
   "author": "Continue Dev, Inc",
-  "version": "2.0.0",
+  "version": "2.0.4",
   "repository": {
     "type": "git",
     "url": "https://github.com/continuedev/continue"
@@ -18,9 +18,9 @@
   "homepage": "https://continue.dev",
   "qna": "https://github.com/continuedev/continue/issues/new/choose",
   "license": "Apache-2.0",
-  "displayName": "Continue - open-source AI code agent",
+  "displayName": "Continue OnPrem — AI code agent (custom v2.0.4)",
   "pricing": "Free",
-  "description": "The leading open-source AI code agent",
+  "description": "Custom build with Vision Proxy, NIM/vLLM fixes, 524K context (based on upstream v2.0.0)",
   "publisher": "Continue",
   "engines": {
     "vscode": "^1.70.0",

@@ -63,6 +63,7 @@ git cherry-pick <patch-2-commit-hash>
 ### Step 3: Merge or Rebase
 
 **Option A: Rebase (cleaner history)**
+
 ```bash
 git checkout main
 git rebase upstream/main
@@ -70,6 +71,7 @@ git rebase upstream/main
 ```
 
 **Option B: Merge (safer, preserves history)**
+
 ```bash
 git checkout main
 git merge upstream/main
@@ -108,11 +110,13 @@ conda run -n node20 npm run package -- --target darwin-arm64
 ### Patch 01 (Empty Response Retry)
 
 **Remove when ANY of:**
+
 - Continue adds built-in handling for `content:null` + `tool_calls:[]`
 - NIM/vLLM servers fix their behavior (return content when no tool needed)
 - PR #12591 or equivalent is merged upstream
 
 **How to check:**
+
 ```bash
 # If upstream has similar logic
 grep -r "tool_calls.*length.*0\|retry.*without.*tools" packages/openai-adapters/src/
@@ -121,11 +125,13 @@ grep -r "tool_calls.*length.*0\|retry.*without.*tools" packages/openai-adapters/
 ### Patch 02 (JSON Sanitize)
 
 **Remove when ANY of:**
+
 - vLLM stops validating tool_calls arguments in history messages (vllm#43995 fixed)
 - Continue adds argument validation upstream
 - All models reliably generate valid JSON (unlikely near-term)
 
 **How to check:**
+
 ```bash
 # If upstream validates arguments
 grep -r "JSON.parse.*arguments\|sanitize.*args" core/llm/
@@ -195,16 +201,17 @@ Trước đó đã thử build VSIX trong Docker container (Linux x86_64) trên 
 
 Native modules trong Continue được **compile hoặc copy từ host OS** tại build time:
 
-| Module | Cách lấy binary | Platform-bound |
-|--------|-----------------|:-:|
-| `onnxruntime-node` | Copy từ `core/node_modules/onnxruntime-node/bin/` | ✅ Binary build lúc `npm install` trên host |
-| `better-sqlite3` | Download prebuild theo target flag | ⚠️ Download đúng nếu `--target` đúng |
-| `@lancedb/vectordb` | npm optional dep theo platform | ✅ Install lúc `npm install` trên host |
-| `@vscode/ripgrep` | npm postinstall download theo platform | ✅ Download lúc `npm install` trên host |
+| Module              | Cách lấy binary                                   |               Platform-bound                |
+| ------------------- | ------------------------------------------------- | :-----------------------------------------: |
+| `onnxruntime-node`  | Copy từ `core/node_modules/onnxruntime-node/bin/` | ✅ Binary build lúc `npm install` trên host |
+| `better-sqlite3`    | Download prebuild theo target flag                |    ⚠️ Download đúng nếu `--target` đúng     |
+| `@lancedb/vectordb` | npm optional dep theo platform                    |   ✅ Install lúc `npm install` trên host    |
+| `@vscode/ripgrep`   | npm postinstall download theo platform            |   ✅ Download lúc `npm install` trên host   |
 
 **Vấn đề cốt lõi**: `onnxruntime-node` và `@lancedb/vectordb` được **copy trực tiếp** từ `node_modules` (đã install trên host) vào output package. Nếu host là Linux → binary là Linux ELF → macOS không load được → extension crash silently (UI stuck).
 
 Script `prepackage.js` flow:
+
 ```
 1. npm install (trên host) → install native modules cho HOST platform
 2. Copy onnxruntime binary từ core/node_modules/ → out/bin/     ← PLATFORM BOUND
@@ -218,12 +225,12 @@ Steps 2, 4, 5 copy binary **từ host `node_modules`** — nên phải build **t
 
 ### Kết luận: Cross-platform build KHÔNG đáng tin cậy
 
-| Build host | Target | Result |
-|-----------|--------|--------|
-| macOS arm64 | `darwin-arm64` | ✅ Works |
-| macOS arm64 | `win32-x64` | ⚠️ sqlite3 OK (downloaded), nhưng onnxruntime/lancedb = macOS binary → **FAIL** |
-| Linux x64 (Docker) | `darwin-arm64` | ❌ FAIL — native modules are Linux |
-| Windows x64 | `win32-x64` | ✅ Works |
+| Build host         | Target         | Result                                                                          |
+| ------------------ | -------------- | ------------------------------------------------------------------------------- |
+| macOS arm64        | `darwin-arm64` | ✅ Works                                                                        |
+| macOS arm64        | `win32-x64`    | ⚠️ sqlite3 OK (downloaded), nhưng onnxruntime/lancedb = macOS binary → **FAIL** |
+| Linux x64 (Docker) | `darwin-arm64` | ❌ FAIL — native modules are Linux                                              |
+| Windows x64        | `win32-x64`    | ✅ Works                                                                        |
 
 ### Recommended: Build trên mỗi platform hoặc CI matrix
 
@@ -236,9 +243,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: macos-14        # Apple Silicon runner
+          - os: macos-14 # Apple Silicon runner
             target: darwin-arm64
-          - os: macos-13        # Intel runner
+          - os: macos-13 # Intel runner
             target: darwin-x64
           - os: windows-latest
             target: win32-x64
@@ -249,7 +256,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: "20"
       - run: npm install --ignore-scripts
       - run: |
           cd packages/config-types && npm install && npm run build && cd ../..
@@ -292,32 +299,62 @@ Phức tạp hơn nhưng giảm build time nếu JS changes nhiều hơn native 
 
 ### Custom version scheme
 
+Dùng semver PATCH field làm custom build number:
+
 ```
-v2.0.0-custom.1  → first custom build based on upstream v2.0.0
-v2.0.0-custom.2  → second custom build (added patches)
-v2.1.0-custom.1  → rebased on upstream v2.1.0
+{upstream_major}.{upstream_minor}.{custom_build_number}
 ```
 
-Trong `extensions/vscode/package.json`:
+| Version | Nghĩa                                      |
+| ------- | ------------------------------------------ |
+| `2.0.0` | Upstream v2.0.0 nguyên bản (chưa custom)   |
+| `2.0.1` | Custom build #1 — patch NIM empty response |
+| `2.0.2` | Custom build #2 — patch JSON sanitize      |
+| `2.0.4` | Custom build #4 — vision proxy + cache     |
+| `2.1.0` | Rebased lên upstream v2.1.0 (reset)        |
+| `2.1.1` | Custom build #1 sau rebase                 |
+
+### Quy tắc
+
+1. **Mỗi lần rebuild có thay đổi code** → tăng PATCH +1
+2. **Sync upstream mới** (vd `v2.1.0`) → reset về `2.1.0`, custom builds tiếp từ `2.1.1`
+3. **Git tag** mỗi release: `git tag v2.0.4`
+4. **VSIX filename** tự động: `continue-darwin-arm64-2.0.4.vsix`
+
+### package.json fields
+
 ```json
 {
-  "version": "2.0.0",
-  "customVersion": "2.0.0-custom.2",
-  "patchLevel": 2
+  "version": "2.0.4",
+  "displayName": "Continue OnPrem — AI code agent",
+  "description": "Custom build with Vision Proxy, NIM/vLLM fixes, 524K context (based on upstream v2.0.0)"
 }
 ```
+
+- `version`: Semver hiển thị trong VS Code Extensions panel
+- `displayName`: Có "OnPrem" để phân biệt với marketplace version
+- `description`: Ghi rõ đây là custom build + features chính
+
+### Ưu điểm so với scheme cũ
+
+| Cũ (`customVersion` metadata)          | Mới (semver PATCH)               |
+| -------------------------------------- | -------------------------------- |
+| VS Code hiện "2.0.0" — không phân biệt | VS Code hiện "2.0.4" — rõ ràng   |
+| Cần mở package.json mới thấy           | Thấy ngay trong Extensions panel |
+| `code --install` không biết upgrade    | `code --install` nhận biết newer |
+| VSIX filename giống nhau               | VSIX filename unique per build   |
 
 ---
 
 ## 7. Decision Matrix: When to Sync
 
-| Upstream Change | Action | Priority |
-|---|---|---|
-| Security fix | Sync immediately | 🔴 High |
-| Bug fix in core LLM logic | Sync soon, test patches | 🟡 Medium |
-| New feature (model support) | Sync when needed | 🟢 Low |
-| UI/UX changes | Sync at convenience | 🟢 Low |
-| Breaking refactor in patched files | Plan migration, test thoroughly | 🔴 High |
+| Upstream Change                    | Action                          | Priority  |
+| ---------------------------------- | ------------------------------- | --------- |
+| Security fix                       | Sync immediately                | 🔴 High   |
+| Bug fix in core LLM logic          | Sync soon, test patches         | 🟡 Medium |
+| New feature (model support)        | Sync when needed                | 🟢 Low    |
+| UI/UX changes                      | Sync at convenience             | 🟢 Low    |
+| Breaking refactor in patched files | Plan migration, test thoroughly | 🔴 High   |
 
 ---
 
@@ -335,7 +372,7 @@ Cả 2 patches đều có thể benefit community. Để submit PR:
 ### PR #2: JSON Sanitize
 
 - Title: `fix(core): sanitize malformed tool arguments in conversation history`
-- Target: `continuedev/continue` main branch  
+- Target: `continuedev/continue` main branch
 - Description: Prevents 400 errors when LLM generates invalid JSON arguments
 - Reference: vLLM issue #43995
 
@@ -350,4 +387,3 @@ git checkout -b fix/empty-response-retry
 gh pr create --title "fix(openai-adapters): retry without tools on empty response" \
   --body "..." --base main
 ```
-

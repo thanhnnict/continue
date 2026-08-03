@@ -13,6 +13,7 @@
  */
 
 import { ChatMessage, ImageMessagePart, MessagePart } from "..";
+import { fetchwithRequestOptions } from "@continuedev/fetch";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -227,23 +228,18 @@ async function describeImage(
   }
 
   try {
-    // Allow self-signed certificates for on-prem/internal VLM endpoints
-    const prevTlsSetting = process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    process.env.NODE_TLS_REJECT_UNAUTHORIZED = "0";
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
-
-    // Restore original setting
-    if (prevTlsSetting !== undefined) {
-      process.env.NODE_TLS_REJECT_UNAUTHORIZED = prevTlsSetting;
-    } else {
-      delete process.env.NODE_TLS_REJECT_UNAUTHORIZED;
-    }
+    // Use fetchwithRequestOptions to respect TLS settings (verifySsl: false)
+    // This ensures self-signed certs for on-prem/internal VLM endpoints are accepted
+    const response = await fetchwithRequestOptions(
+      url,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify(requestBody),
+        signal: controller.signal,
+      },
+      { verifySsl: false },
+    );
 
     if (!response.ok) {
       const errorText = await response.text().catch(() => "Unknown error");
@@ -253,7 +249,7 @@ async function describeImage(
       return `[Image: VLM description failed — ${response.status}]`;
     }
 
-    const data = await response.json();
+    const data: any = await response.json();
     const content = data?.choices?.[0]?.message?.content;
 
     if (!content) {

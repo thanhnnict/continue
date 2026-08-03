@@ -31,13 +31,15 @@ export interface VisionProxyOptions {
 
   /**
    * Prompt template for image description.
-   * - "code": Optimized for code screenshots
-   * - "ui": Optimized for UI/UX screenshots
-   * - "diagram": Optimized for architecture/flowchart diagrams
-   * - "auto": Generic all-purpose description
+   * - "code": OCR-focused — extracts ONLY code from editor area, ignores UI
+   * - "config": OCR-focused — extracts ONLY config content (YAML/JSON/TOML)
+   * - "error": OCR-focused — extracts ONLY error messages and stack traces
+   * - "ui": Describes UI/UX screenshots, web pages
+   * - "diagram": Describes architecture diagrams, flowcharts
+   * - "auto": General-purpose — prioritizes code, ignores UI chrome
    * - string: Custom prompt template
    */
-  promptTemplate?: "code" | "ui" | "diagram" | "auto" | string;
+  promptTemplate?: "code" | "config" | "error" | "ui" | "diagram" | "auto" | string;
 
   /** Temperature for VLM (default: 0.2 for deterministic descriptions) */
   temperature?: number;
@@ -52,12 +54,36 @@ export interface VisionProxyOptions {
 // ─── Prompt Templates ────────────────────────────────────────────────────────
 
 const PROMPT_TEMPLATES: Record<string, string> = {
-  code: `Describe this code screenshot in detail:
-1. What programming language is shown?
-2. Transcribe all visible code exactly as written
-3. Note any error messages, highlights, or annotations
-4. Describe the file name and line numbers if visible
-Be concise but accurate. Prioritize code transcription.`,
+  code: `You are an OCR tool for code screenshots. Your ONLY task is to extract and transcribe code from the editor area of this image.
+
+RULES:
+- Output ONLY the code content, nothing else
+- Do NOT describe the image, UI, layout, or design
+- Do NOT add explanations, markdown formatting, or code fences
+- Preserve exact indentation and line breaks
+- If there are multiple visible code blocks, transcribe each one separated by a blank line
+- Ignore ALL UI elements: sidebars, status bars, buttons, file trees, git graphs, task lists, terminal output
+- If the image contains a diff view, transcribe the changed lines with their +/- markers
+- If no code content is visible, say exactly: "[No code content visible in this image]"`,
+
+  config: `You are an OCR tool for configuration files. Extract ONLY the configuration content from this image.
+
+RULES:
+- Output ONLY the config content (YAML, JSON, TOML, etc.)
+- Ignore ALL UI elements, file trees, terminal output, and non-config content
+- Preserve exact indentation
+- Do not wrap in markdown code blocks
+- Include commented lines if visible
+- If no config content is visible, say exactly: "[No configuration content visible in this image]"`,
+
+  error: `You are an OCR tool for error messages. Extract ONLY the error content from this image.
+
+RULES:
+- Focus on error text, stack traces, error codes, and warning messages
+- Ignore surrounding UI elements
+- Output the error message exactly as shown
+- Preserve all formatting of the error (line breaks, indentation)
+- If no error content is visible, say exactly: "[No error content visible in this image]"`,
 
   ui: `Describe this UI screenshot:
 1. What application or webpage is shown?
@@ -73,12 +99,40 @@ Be concise and structured.`,
 4. Note any annotations, colors, or groupings
 Be precise about the relationships and data flow.`,
 
-  auto: `Describe this image in detail for a software development context.
-If it contains code, transcribe the code exactly.
-If it contains UI elements, describe the layout and visible text.
-If it contains a diagram, describe components and their relationships.
-Be concise but thorough.`,
+  auto: `You are analyzing a screenshot of a code editor (VS Code or similar).
+
+TASK: Extract ALL code/content from the editor area ONLY.
+
+RULES:
+1. FIRST PRIORITY: Transcribe any visible code or configuration exactly
+2. If a filename is visible (from tab, breadcrumb, or title bar), note it as: [File: filename.ext]
+3. Note any error messages, warnings, or terminal output if present
+4. IGNORE completely: UI elements, sidebars, status bars, buttons, file trees, git graphs, task lists
+5. IGNORE completely: Descriptions of the layout, colors, or visual design
+6. If the image is mostly UI with little code, say "[No significant code content]"
+
+Output format:
+[File: filename.ext if visible]
+<transcribed code/content>`,
 };
+
+// ─── Description Cache ───────────────────────────────────────────────────────
+
+interface CacheEntry {
+  description: string;
+  timestamp: number;
+}
+
+const descriptionCache = new Map<string, CacheEntry>();
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Get a cache key for an image URL (strip any query params that change per-request)
+ */
+function getCacheKey(imageUrl: string): string {
+  // Use the base64 data or URL without random query params
+  return imageUrl.split("?")[0];
+}
 
 // ─── Helper Functions ────────────────────────────────────────────────────────
 
@@ -117,9 +171,22 @@ async function describeImage(
   options: VisionProxyOptions,
   signal?: AbortSignal,
 ): Promise<string> {
+  // Check cache first
+  const cacheKey = getCacheKey(imageUrl);
+  const cached = descriptionCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+    console.log("[VisionProxy] Cache hit — reusing previous description");
+    return cached.description;
+  }
+
   const endpoint = options.endpoint.replace(/\/$/, "");
   const url = `${endpoint}/chat/completions`;
   const promptText = getPromptTemplate(options.promptTemplate);
+
+  const templateName = options.promptTemplate || "auto";
+  console.log(
+    `[VisionProxy] Describing image with template "${templateName}"...`,
+  );
 
   const requestBody = {
     model: options.model,
@@ -183,7 +250,18 @@ async function describeImage(
       return "[Image: VLM returned empty description]";
     }
 
-    return content.trim();
+    const trimmed = content.trim();
+    console.log(
+      `[VisionProxy] VLM returned ${trimmed.length} chars (template: "${templateName}")`,
+    );
+
+    // Save to cache
+    descriptionCache.set(cacheKey, {
+      description: trimmed,
+      timestamp: Date.now(),
+    });
+
+    return trimmed;
   } catch (error: any) {
     if (error.name === "AbortError") {
       console.warn("[VisionProxy] VLM request timed out or was aborted");
@@ -253,6 +331,15 @@ export async function processMessagesWithVisionProxy(
       // Non-image messages pass through unchanged
       result.push(message);
     }
+  }
+
+  const imageCount = messages.filter(
+    (m) => m.role === "user" && Array.isArray(m.content) && hasImageContent(m.content),
+  ).length;
+  if (imageCount > 0) {
+    console.log(
+      `[VisionProxy] Processed ${imageCount} image message(s) through VLM`,
+    );
   }
 
   return result;

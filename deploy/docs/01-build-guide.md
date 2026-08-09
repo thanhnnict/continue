@@ -1,107 +1,129 @@
-# Build Continue VSCode Extension — Windows 11
+# Build Continue VSCode Extension — Hướng dẫn đầy đủ
 
-> **Target**: win32-x64 (Windows 11 64-bit)  
-> **Cập nhật**: 2026-08-09 (moved from docs/build/ to deploy/docs/)  
-> **Node.js**: >= 20.x (tested with v20.14.0)  
-> **npm**: >= 10.x (tested with 10.7.0)  
-> **Version**: v2.1.1 (custom on-prem build, base upstream/main)
+> **Cập nhật:** 2026-08-09
+> **Repo:** `E:\08-Sources\1.AI\continue` (Windows) / `/mnt/e/08-Sources/1.AI/continue` (WSL)
+> **Version hiện tại:** `2.1.1` (branch `develop` / `release/v2.1.x-onprem`)
+
+---
+
+## ⚠️ Yêu cầu quan trọng — Node.js version
+
+Project yêu cầu **Node.js 20.x** (`.node-version` file ghi `20.20.1`).
+
+### Quản lý Node.js bằng Miniconda (recommended — đã setup sẵn)
+
+Môi trường build chuẩn dùng **conda env `node20`** được quản lý bởi Miniconda:
+
+```bash
+# Kiểm tra env đã có chưa
+conda env list | grep node20
+
+# Tạo mới nếu chưa có
+conda create -n node20 -y nodejs=20
+
+# Verify
+conda run -n node20 node --version   # v20.17.0
+conda run -n node20 npm --version    # 10.8.2
+```
+
+**Luôn dùng `conda run -n node20` để chạy npm/node commands** — KHÔNG dùng system Node.js
+vì có thể khác version, gây lỗi native module mismatch.
+
+```bash
+# ĐÚNG — chạy qua conda env
+conda run -n node20 npm install
+conda run -n node20 npm run build
+
+# SAI — dùng system Node.js (version có thể khác)
+npm install
+npm run build
+```
 
 ---
 
 ## Mục lục
 
-- [1. Yêu cầu hệ thống](#1-yêu-cầu-hệ-thống)
-- [2. Chuẩn bị môi trường](#2-chuẩn-bị-môi-trường)
-- [3. Cấu trúc thư mục](#3-cấu-trúc-thư-mục)
-- [4. Build tự động (recommended)](#4-build-tự-động-recommended)
-- [5. Build thủ công từng bước](#5-build-thủ-công-từng-bước)
-- [6. Install extension](#6-install-extension)
-- [7. Verify kết quả](#7-verify-kết-quả)
-- [8. Troubleshooting](#8-troubleshooting)
-- [9. Các patches đã áp dụng](#9-các-patches-đã-áp-dụng)
+1. [Môi trường build](#1-môi-trường-build)
+2. [Chuẩn bị repo](#2-chuẩn-bị-repo)
+3. [Cấu trúc thư mục](#3-cấu-trúc-thư-mục)
+4. [Build — WSL/Linux (recommended)](#4-build--wsllinux-recommended)
+5. [Build — Windows PowerShell](#5-build--windows-powershell)
+6. [Build targets và platform notes](#6-build-targets-và-platform-notes)
+7. [Install extension](#7-install-extension)
+8. [Verify kết quả](#8-verify-kết-quả)
+9. [Các patches đã áp dụng](#9-các-patches-đã-áp-dụng)
 
 ---
 
-## 1. Yêu cầu hệ thống
+## 1. Môi trường build
 
-### Phần mềm
+### Conda env `node20` (WSL/Linux)
 
-| Phần mềm | Phiên bản tối thiểu | Kiểm tra |
-|----------|:-------------------:|----------|
-| Windows | 10 / 11 | \winver\ |
-| Node.js | >= 20.20.1 | \
-ode --version\ |
-| npm | >= 10.x | \
-pm --version\ |
-| Git | >= 2.x | \git --version\ |
-| VSCode | >= 1.70.0 | \code --version\ |
+| Component | Version | Quản lý |
+|-----------|---------|---------|
+| Node.js | v20.17.0 | conda env `node20` |
+| npm | 10.8.2 | conda env `node20` |
+| conda | latest | Miniconda |
+| git | system | apt |
 
-### Kiểm tra nhanh
-
-\\\powershell
-node --version
-npm --version
+```bash
+# Kiểm tra đầy đủ
+conda run -n node20 node --version   # v20.17.0
+conda run -n node20 npm --version    # 10.8.2
 git --version
-code --version
-\\\
+```
 
-### Lưu ý Node.js version
+### Windows PowerShell
 
-Extension yêu cầu \
-ode >= 20.20.1\. Nếu bạn dùng Node.js 20.14.0 (như môi trường hiện tại), build vẫn hoạt động nhưng sẽ có cảnh báo \EBADENGINE\ — không ảnh hưởng đến kết quả.
+Nếu build trên Windows (cho target `win32-x64`), cần Node.js 20.x được cài trực tiếp.
+Khuyến nghị dùng **nvm-windows** hoặc tải trực tiếp từ nodejs.org.
 
-Để nâng cấp Node.js:
+```powershell
+node --version    # phải là v20.x.x
+npm --version     # phải là 10.x
+```
 
-\\\powershell
-# Kiểm tra phiên bản hiện tại
-node --version
-
-# Download Node.js 20.20.1+ từ: https://nodejs.org/
-# Hoặc dùng nvm-windows
-nvm install 20.20.1
-nvm use 20.20.1
-\\\
+> **Lưu ý:** Trên Windows không có conda env `node20`. Dùng Node.js được cài trực tiếp.
+> Cần đảm bảo version đúng trước khi build.
 
 ---
 
-## 2. Chuẩn bị môi trường
+## 2. Chuẩn bị repo
 
-### 2.1. Clone repository
+```bash
+# Repo location
+cd /mnt/e/08-Sources/1.AI/continue  # WSL
+# hoặc E:\08-Sources\1.AI\continue  # Windows
 
-\\\powershell
-# Ví dụ: clone vào E:\08-Sources\1.AI\continue
-git clone https://github.com/continuedev/continue.git
-cd continue
-\\\
+# Đảm bảo đang ở đúng branch
+git branch          # phải là develop hoặc release/v2.1.x-onprem
+git log --oneline -3
 
-### 2.2. Kiểm tra branch và patches
+# Kiểm tra patches còn nguyên
+grep -c "retry\|without.*tools" packages/openai-adapters/src/apis/OpenAI.ts
+# Expected: >= 1
 
-\\\powershell
-# Kiểm tra branch hiện tại
-git branch
-
-# Kiểm tra các patches đã áp dụng
-Select-String -Path packages/openai-adapters/src/apis/OpenAI.ts -Pattern "Retry without tools"
-Select-String -Path core/llm/openaiTypeConverters.ts -Pattern "Sanitize arguments"
-Test-Path core/llm/visionProxy.ts
-Select-String -Path extensions/vscode/src/extension.ts -Pattern "NODE_TLS_REJECT_UNAUTHORIZED"
-\\\
+test -f core/llm/visionProxy.ts && echo "vision proxy OK" || echo "MISSING"
+grep -c "rejectUnauthorized\|verifySsl" packages/fetch/src/getAgentOptions.ts
+# Expected: >= 1
+```
 
 ---
 
 ## 3. Cấu trúc thư mục
 
-\\\
+```
 continue/
-├── docs/
-│   └── build/
-│       ├── README.md              # Hướng dẫn build (file này)
-│       └── troubleshooting.md     # Xử lý lỗi thường gặp
+├── .patches/                      # Custom patch docs (01-08)
+├── deploy/
+│   ├── README.md                  # Air-gap deployment guide
+│   ├── docs/
+│   │   ├── 01-build-guide.md      # File này
+│   │   └── 02-build-troubleshooting.md
+│   ├── package-deploy.ps1         # Main deploy script
+│   └── scripts/                   # Deploy helper scripts
 ├── scripts/
-│   ├── build-all.ps1              # Build script tự động (Windows)
-│   ├── build-packages.js          # Build script cho packages
-│   └── util/
-│       └── index.js               # Utilities cho build
+│   └── build-all.ps1              # Build tự động (Windows)
 ├── packages/
 │   ├── config-types/              # [1] Build đầu tiên
 │   ├── llm-info/                  # [2]
@@ -111,18 +133,13 @@ continue/
 │   └── terminal-security/         # [6]
 ├── core/                          # [7]
 ├── gui/                           # [8]
-├── extensions/
-│   └── vscode/                    # [9] Prepackage + Package → VSIX
-│       ├── build/                 # Output: *.vsix files
-│       └── scripts/               # Build scripts của extension
-├── .patches/                      # Tài liệu các custom patches
-└── .vscode/
-    └── tasks.json                 # VSCode tasks cho build
-\\\
+└── extensions/vscode/             # [9] → VSIX output
+    └── build/continue-{target}-{version}.vsix
+```
 
 ### Thứ tự build (dependency chain)
 
-\\\mermaid
+```mermaid
 flowchart LR
     A[config-types] --> B[llm-info]
     A --> C[fetch]
@@ -136,314 +153,237 @@ flowchart LR
     G --> I[vscode extension]
     H --> I
     I --> J[VSIX output]
-\\\
+```
 
 ---
 
-## 4. Build tự động (recommended)
+## 4. Build — WSL/Linux (recommended)
 
-### 4.1. Chạy build script
+Build từ WSL là cách ưu tiên vì conda env `node20` đã được setup sẵn.
 
-\\\powershell
+### 4.1. Build nhanh (single command)
+
+```bash
+cd /mnt/e/08-Sources/1.AI/continue
+git checkout release/v2.1.x-onprem  # hoặc develop
+
+conda run -n node20 bash -c '
+  set -e
+  cd packages/openai-adapters && npm run build && cd ../.. &&
+  cd core && npm run build && cd .. &&
+  cd gui && npm run build && cd .. &&
+  cd extensions/vscode &&
+    npm run prepackage -- --target linux-x64 &&
+    npm run package -- --target linux-x64
+'
+
+ls -lh extensions/vscode/build/*.vsix
+```
+
+### 4.2. Build từng bước (khi cần debug)
+
+```bash
+cd /mnt/e/08-Sources/1.AI/continue
+
+# Bước 1-6: Build packages (chỉ cần nếu packages có thay đổi)
+for pkg in config-types llm-info fetch openai-adapters config-yaml terminal-security; do
+  echo "=== Building $pkg ==="
+  conda run -n node20 bash -c "cd packages/$pkg && npm run build 2>&1 | tail -3"
+done
+
+# Bước 7: Core
+echo "=== Building core ==="
+conda run -n node20 bash -c "cd core && npm run build 2>&1 | tail -5"
+
+# Bước 8: GUI
+echo "=== Building gui ==="
+conda run -n node20 bash -c "cd gui && npm run build 2>&1 | tail -5"
+
+# Bước 9: VSCode extension
+echo "=== Packaging extension ==="
+conda run -n node20 bash -c "
+  cd extensions/vscode &&
+  npm run prepackage -- --target linux-x64 &&
+  npm run package -- --target linux-x64
+"
+
+# Kết quả
+ls -lh extensions/vscode/build/*.vsix
+```
+
+### 4.3. Chỉ rebuild extension (khi chỉ thay đổi GUI/core, không phải packages)
+
+```bash
+cd /mnt/e/08-Sources/1.AI/continue
+
+conda run -n node20 bash -c '
+  cd core && npm run build && cd .. &&
+  cd gui && npm run build && cd .. &&
+  cd extensions/vscode &&
+    npm run prepackage -- --target linux-x64 &&
+    npm run package -- --target linux-x64
+'
+```
+
+---
+
+## 5. Build — Windows PowerShell
+
+> **⚠️ Yêu cầu:** Node.js 20.x phải được cài trực tiếp trên Windows (không qua conda).
+> Kiểm tra `node --version` trước khi build.
+
+### 5.1. Build tự động
+
+```powershell
 cd E:\08-Sources\1.AI\continue
-
-# Build với target mặc định (win32-x64)
 .\scripts\build-all.ps1
+# hoặc: .\scripts\build-all.ps1 -Target win32-x64
+```
 
-# Hoặc chỉ định target cụ thể
-.\scripts\build-all.ps1 -Target win32-x64
-\\\
+### 5.2. Build thủ công
 
-### 4.2. Tiến trình build
+```powershell
+$root = "E:\08-Sources\1.AI\continue"
 
-Script sẽ tự động chạy theo thứ tự:
+# Packages
+foreach ($pkg in @("config-types","llm-info","fetch","openai-adapters","config-yaml","terminal-security")) {
+    cd "$root\packages\$pkg"
+    npm install; npm run build
+}
 
-| Step | Package | Command | Thời gian |
-|:----:|---------|---------|:---------:|
-| 1 | \config-types\ | \
-pm install && npm run build\ | ~15s |
-| 2 | \llm-info\ | \
-pm install && npm run build\ | ~25s |
-| 3 | \etch\ | \
-pm install && npm run build\ | ~20s |
-| 4 | \openai-adapters\ | \
-pm install && npm run build\ | ~30s |
-| 5 | \config-yaml\ | \
-pm install && npm run build\ | ~25s |
-| 6 | \	erminal-security\ | \
-pm install && npm run build\ | ~20s |
-| 7 | \core\ | \
-pm install && npm run build\ | ~30s |
-| 8 | \gui\ | \
-pm install && npm run build\ | ~60s |
-| 9 | \scode\ | \
-pm install && prepackage && package\ | ~120s |
-| | **Tổng** | | **~5-6 phút** |
+# Core
+cd "$root\core"; npm install; npm run build
 
-### 4.3. Kết quả
+# GUI
+cd "$root\gui"; npm install; npm run build
 
-Sau khi build thành công:
-
-\\\
-========================================
-  BUILD COMPLETE!
-  Total time: 7.8 min
-========================================
-
-  VSIX: continue-win32-x64-2.1.1.vsix (71.01 MB)
-
-Install with:
-  code --install-extension extensions\vscode\build\continue-*.vsix --force
-\\\
-
----
-
-## 5. Build thủ công từng bước
-
-### Step 1-6: Build packages
-
-\\\powershell
-# Từ root project directory
- = "E:\08-Sources\1.AI\continue"
-
-# 1. config-types
-cd "\packages\config-types"
-npm install && npm run build
-
-# 2. llm-info
-cd "\packages\llm-info"
-npm install && npm run build
-
-# 3. fetch
-cd "\packages\fetch"
-npm install && npm run build
-
-# 4. openai-adapters
-cd "\packages\openai-adapters"
-npm install && npm run build
-
-# 5. config-yaml
-cd "\packages\config-yaml"
-npm install && npm run build
-
-# 6. terminal-security
-cd "\packages\terminal-security"
-npm install && npm run build
-\\\
-
-### Step 7: Build core
-
-\\\powershell
-cd "\core"
-npm install && npm run build
-\\\
-
-### Step 8: Build GUI
-
-\\\powershell
-cd "\gui"
-npm install && npm run build
-\\\
-
-### Step 9: Build VSCode extension
-
-\\\powershell
-cd "\extensions\vscode"
+# Extension
+cd "$root\extensions\vscode"
 npm install
 npm run prepackage -- --target win32-x64
 npm run package -- --target win32-x64
-\\\
+```
 
-### Kiểm tra output
+### 5.3. Thời gian ước tính
 
-\\\powershell
-Get-ChildItem "\extensions\vscode\build\*.vsix"
-\\\
+| Step | Package | Thời gian |
+|:----:|---------|:---------:|
+| 1-6 | packages | ~2 phút |
+| 7 | core | ~30s |
+| 8 | gui | ~60s |
+| 9 | vscode extension | ~2 phút |
+| | **Tổng** | **~5-6 phút** |
 
 ---
 
-## 6. Install extension
+## 6. Build targets và platform notes
 
-### 6.1. Install bằng command line
+> **⚠️ QUAN TRỌNG: Build phải chạy trên đúng target OS!**
+> Native modules (`onnxruntime-node`, `@lancedb/vectordb`, `@vscode/ripgrep`) được copy
+> trực tiếp từ `node_modules` của host — không thể cross-compile.
 
-\\\powershell
-cd E:\08-Sources\1.AI\continue
+| Build host | Target flag | Output VSIX | Dùng cho |
+|---|---|---|---|
+| WSL/Linux x64 | `linux-x64` | `continue-linux-x64-2.1.1.vsix` | Linux users |
+| Windows x64 | `win32-x64` | `continue-win32-x64-2.1.1.vsix` | Windows users |
+| macOS arm64 | `darwin-arm64` | `continue-darwin-arm64-2.1.1.vsix` | Mac M-series |
+| macOS x64 | `darwin-x64` | `continue-darwin-x64-2.1.1.vsix` | Mac Intel |
 
-# Install VSIX vào VSCode
+```bash
+# Build cho từng platform — chạy trên đúng OS tương ứng
+npm run prepackage -- --target linux-x64    # trên Linux/WSL
+npm run prepackage -- --target win32-x64    # trên Windows
+npm run prepackage -- --target darwin-arm64 # trên macOS Apple Silicon
+```
+
+---
+
+## 7. Install extension
+
+### WSL/Linux
+
+```bash
+code --install-extension extensions/vscode/build/continue-linux-x64-2.1.1.vsix --force
+```
+
+### Windows
+
+```powershell
 code --install-extension extensions\vscode\build\continue-win32-x64-2.1.1.vsix --force
-\\\
+```
 
-### 6.2. Install bằng VSCode UI
+### VSCode UI (cross-platform)
 
-1. Mở VSCode
-2. Mở Extensions panel (\Ctrl+Shift+X\)
-3. Click \...\ (More Actions) → \Install from VSIX...\
-4. Chọn file \extensions\vscode\build\continue-win32-x64-2.1.1.vsix\
+1. `Ctrl+Shift+X` → Extensions panel
+2. Click `...` → `Install from VSIX...`
+3. Chọn file `.vsix` tương ứng platform
 
-### 6.3. Verify installation
+### Verify sau install
 
-\\\powershell
-# Kiểm tra extension đã install
-code --list-extensions | Select-String "continue"
-\\\"
-
-Hoặc trong VSCode: \Extensions\ panel → tìm \Continue OnPrem\
+```bash
+code --list-extensions | grep continue
+# Expected: Continue.continue
+```
 
 ---
 
-## 7. Verify kết quả
+## 8. Verify kết quả
 
-### 7.1. Kiểm tra VSIX file
+### VSIX file
 
-\\\powershell
-Get-ChildItem extensions\vscode\build\*.vsix | ForEach-Object {
-    Write-Host "File: "
-    Write-Host "Size: 0 MB"
-    Write-Host "Modified: "
-}
-\\\
+```bash
+# WSL
+ls -lh extensions/vscode/build/*.vsix
+# Expected: ~70-75 MB, ngày hôm nay
+```
 
-Kỳ vọng:
-- File: \continue-win32-x64-2.1.1.vsix\
-- Size: ~71 MB
-- Ngày: mới nhất
+### Patches còn nguyên
 
-### 7.2. Kiểm tra patches trong build
+```bash
+# Patch 1 — NIM empty response retry
+grep -c "retry\|without.*tools" packages/openai-adapters/src/apis/OpenAI.ts
+# Expected: >= 1
 
-\\\powershell
-Write-Host "=== Verify Patches ==="
+# Patch 2 — JSON sanitize
+grep -c "sanitize\|JSON.parse" core/llm/openaiTypeConverters.ts
+# Expected: >= 1
 
-Write-Host "1. NIM Empty Response Retry:"
-Select-String -Path packages/openai-adapters/src/apis/OpenAI.ts -Pattern "Retry without tools"
+# Patch 3 — Vision proxy
+test -f core/llm/visionProxy.ts && echo "OK" || echo "MISSING"
 
-Write-Host "2. JSON Sanitize:"
-Select-String -Path core/llm/openaiTypeConverters.ts -Pattern "Sanitize arguments"
+# Patch 4 — TLS
+grep -c "rejectUnauthorized\|verifySsl" packages/fetch/src/getAgentOptions.ts
+# Expected: >= 1
+```
 
-Write-Host "3. Vision Proxy:"
-if (Test-Path core/llm/visionProxy.ts) { Write-Host "   visionProxy.ts exists" }
-Select-String -Path core/llm/index.ts -Pattern "Vision Proxy"
+### Extension hoạt động
 
-Write-Host "4. TLS Self-Signed Cert:"
-Select-String -Path extensions/vscode/src/extension.ts -Pattern "NODE_TLS_REJECT_UNAUTHORIZED"
-\\\
-
-### 7.3. Kiểm tra extension trong VSCode
-
-1. Mở VSCode
-2. \Ctrl+Shift+P\ → \Continue: Open config file\ — kiểm tra config
-3. Thử chat với model — kiểm tra response không bị blank
-
----
-
-## 8. Troubleshooting
-
-### 8.1. Lỗi \EBADENGINE\ warnings
-
-\\\
-npm warn EBADENGINE Unsupported engine { package: 'continue@2.0.5', required: { node: '>=20.20.1' } ... }
-\\\
-
-**Nguyên nhân**: Node.js version < 20.20.1  
-**Giải pháp**: Nâng cấp Node.js lên >= 20.20.1, hoặc bỏ qua (không ảnh hưởng build).
-
-### 8.2. Lỗi \
-pm install\ thất bại
-
-\\\
-npm ERR! code EINTEGRITY
-npm ERR! errno EINTEGRITY
-\\\
-
-**Nguyên nhân**: Cache npm bị corrupt  
-**Giải pháp**:
-
-\\\powershell
-npm cache clean --force
-npm install
-\\\
-
-### 8.3. Lỗi \prepackage\ thất bại
-
-\\\
-Error: Cannot find module '...'
-\\\
-
-**Nguyên nhân**: Thiếu dependencies ở các bước trước  
-**Giải pháp**: Build lại từ đầu với script tự động
-
-### 8.4. Lỗi \sce package\ thất bại
-
-\\\
-Error: Missing extension icon
-\\\
-
-**Nguyên nhân**: Thiếu file \media/icon.png\  
-**Giải pháp**: Kiểm tra file tồn tại:
-
-\\\powershell
-Test-Path extensions/vscode/media/icon.png
-\\\
-
-### 8.5. Extension install nhưng không hoạt động
-
-**Nguyên nhân**: Có thể do:
-- Xung đột với Continue version cũ
-- Native modules không đúng platform
-
-**Giải pháp**:
-
-\\\powershell
-# Uninstall version cũ
-code --uninstall-extension continue
-
-# Install lại
-code --install-extension extensions\vscode\build\continue-win32-x64-2.1.1.vsix --force
-
-# Reload VSCode window
-# Ctrl+Shift+P → Developer: Reload Window
-\\\
+1. Reload VSCode: `Ctrl+Shift+P` → `Developer: Reload Window`
+2. `Ctrl+Shift+P` → `Continue: Open config file` — config load được
+3. Chat thử với model — response không bị blank
 
 ---
 
 ## 9. Các patches đã áp dụng
 
-Extension này bao gồm 4 custom patches cho on-prem deployment:
+| # | Patch doc | File thay đổi | Mô tả |
+|:-:|-----------|--------------|-------|
+| 1 | `01-nim-empty-response-retry.md` | `packages/openai-adapters/src/apis/OpenAI.ts` | Retry without tools khi NIM/vLLM trả `content:null` + `tool_calls:[]` |
+| 2 | `02-tool-arguments-json-sanitize.md` | `core/llm/openaiTypeConverters.ts` | Sanitize malformed JSON tool args |
+| 3 | `04-vision-proxy.md` | `core/llm/visionProxy.ts` | Vision proxy cho text-only LLMs |
+| 4 | `08-tls-self-signed-fix.md` | `packages/fetch/src/getAgentOptions.ts` | Default `rejectUnauthorized: false` cho on-prem |
+| 5 | — | `gui/src/components/mainInput/ContextStatus.tsx` | Always-on context usage display |
 
-| # | Patch | File | Mô tả |
-|:-:|-------|------|-------|
-| 1 | NIM Empty Response Retry | \packages/openai-adapters/src/apis/OpenAI.ts\ | Retry without tools khi server trả về \content: null\ + \	ool_calls: []\ |
-| 2 | JSON Sanitize | \core/llm/openaiTypeConverters.ts\ | Validate JSON arguments trong tool_calls trước khi gửi lại server |
-| 3 | Vision Proxy | \core/llm/visionProxy.ts\ | Route images qua VLM (Qwen2.5-VL) cho text-only LLMs |
-| 4 | TLS Self-Signed Cert | \extensions/vscode/src/extension.ts\ | Cho phép self-signed certificates |
-
-Chi tiết: [.patches/README.md](../../.patches/README.md)
+Chi tiết: [`.patches/README.md`](../../.patches/README.md)
 
 ---
 
-## Appendix
+## Appendix — So sánh build platforms
 
-### A. So sánh build Windows vs macOS
-
-| Hạng mục | Windows 11 | macOS (Apple Silicon) |
-|----------|:----------:|:---------------------:|
-| Target | \win32-x64\ | \darwin-arm64\ |
-| Native modules | \onnxruntime.dll\, \
-ode_sqlite3.node\ | \libonnxruntime.dylib\, \
-ode_sqlite3.node\ |
-| LanceDB | \ectordb-win32-x64-msvc\ | \ectordb-darwin-arm64\ |
-| ripgrep | \
-g.exe\ | \
-g\ |
-| Thời gian build | ~5-8 phút | ~5-8 phút |
-| VSIX size | ~71 MB | ~70 MB |
-
-### B. File tham chiếu
-
-| File | Mô tả |
-|------|-------|
-| \scripts/build-all.ps1\ | Build script tự động cho Windows |
-| \extensions/vscode/scripts/prepackage.js\ | Prepackage script (copy native modules) |
-| \extensions/vscode/scripts/package.js\ | Package script (gọi vsce) |
-| \extensions/vscode/scripts/download-copy-sqlite.js\ | Download sqlite3 binary |
-| \extensions/vscode/scripts/install-copy-nodemodule.js\ | Copy lancedb binary |
-| \.patches/README.md\ | Danh sách và mô tả patches |
+| Hạng mục | WSL/Linux x64 | Windows x64 | macOS arm64 |
+|----------|:------------:|:-----------:|:-----------:|
+| Target | `linux-x64` | `win32-x64` | `darwin-arm64` |
+| Node version | conda `node20` | node trực tiếp | nvm/node |
+| Thời gian build | ~5-6 phút | ~5-8 phút | ~5-8 phút |
+| VSIX size | ~70 MB | ~71 MB | ~70 MB |
+| Cross-compile | ❌ | ❌ | ❌ |

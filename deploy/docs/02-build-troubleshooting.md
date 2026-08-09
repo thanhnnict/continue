@@ -1,316 +1,367 @@
-﻿# Troubleshooting — Build Continue Extension on Windows
+# Troubleshooting — Build Continue Extension
 
-> Các lỗi thường gặp và cách xử lý khi build Continue VSCode Extension trên Windows 11.
+> Tham khảo: [`01-build-guide.md`](./01-build-guide.md)
 
 ---
 
-## 1. Lỗi npm
+## 0. Checklist đầu tiên
 
-### 1.1. EBADENGINE warnings
+Trước khi troubleshoot, kiểm tra nhanh:
 
-**Hiện tượng**:
-```
-npm warn EBADENGINE Unsupported engine { package: 'continue@2.0.5', required: { node: '>=20.20.1' } ... }
-```
+```bash
+# 1. Đúng branch chưa?
+git branch
+# Expected: develop hoặc release/v2.1.x-onprem
 
-**Nguyên nhân**: Node.js version thấp hơn yêu cầu (>= 20.20.1).
-**Mức độ ảnh hưởng**: ⚠️ Warning — không gây lỗi build.
-**Xử lý**:
-- Bỏ qua nếu build thành công
-- Hoặc nâng cấp Node.js: `nvm install 20.20.1 && nvm use 20.20.1`
+# 2. Đúng Node.js version chưa?
+conda run -n node20 node --version
+# Expected: v20.17.0
 
-### 1.2. EINTEGRITY / cache corrupt
+# 3. conda env node20 đã có chưa?
+conda env list | grep node20
+# Nếu chưa: conda create -n node20 -y nodejs=20
 
-**Hiện tượng**:
-```
-npm ERR! code EINTEGRITY
-npm ERR! errno EINTEGRITY
-```
-
-**Xử lý**:
-```powershell
-npm cache clean --force
-npm install
-```
-
-### 1.3. ERESOLVE peer dependency
-
-**Hiện tượng**:
-```
-npm ERR! Could not resolve dependency:
-npm ERR! peerOptional @types/node@"^18.0.0 || ^20.0.0 || >=22.0.0"
-```
-
-**Xử lý**:
-```powershell
-npm install --legacy-peer-deps
-```
-
-### 1.4. Network timeout / fetch failed
-
-**Hiện tượng**:
-```
-npm ERR! network timeout
-npm ERR! fetch failed
-```
-
-**Nguyên nhân**: Mạng chậm hoặc bị chặn (Nexus/firewall).
-**Xử lý**:
-```powershell
-# Tăng timeout
-npm config set fetch-timeout 120000
-npm config set fetch-retries 5
-
-# Hoặc dùng registry khác
-npm install --registry https://registry.npmjs.org
+# 4. Working directory đúng chưa?
+pwd
+# Expected: /mnt/e/08-Sources/1.AI/continue
 ```
 
 ---
 
-## 2. Lỗi build
+## 1. Lỗi liên quan Node.js / conda
 
-### 2.1. TypeScript compilation error
+### 1.1. `conda: command not found`
 
-**Hiện tượng**:
-```
-src/file.ts:XX:YY - error TS2322: Type 'X' is not assignable to type 'Y'
-```
+**Nguyên nhân:** conda chưa được thêm vào PATH trong shell hiện tại.
 
-**Nguyên nhân**: Code TypeScript không pass type check.
-**Xử lý**:
-- Kiểm tra file lỗi và sửa type
-- Hoặc dùng `// @ts-ignore` (tạm thời)
-- Hoặc set `"skipLibCheck": true` trong tsconfig.json
+**Fix:**
+```bash
+# Thêm conda vào PATH
+source ~/miniconda3/etc/profile.d/conda.sh
 
-### 2.2. Cannot find module
-
-**Hiện tượng**:
-```
-Error: Cannot find module '@continuedev/config-types'
+# Hoặc init cho bash
+conda init bash
+source ~/.bashrc
 ```
 
-**Nguyên nhân**: Build sai thứ tự — package dependency chưa được build.
-**Xử lý**: Build lại theo đúng thứ tự (dùng `scripts/build-all.ps1`).
+### 1.2. conda env `node20` chưa có
 
-### 2.3. prepackage thất bại
+**Triệu chứng:** `conda run -n node20 node --version` báo lỗi.
 
-**Hiện tượng**:
+**Fix:**
+```bash
+conda create -n node20 -y nodejs=20
+conda run -n node20 node --version   # verify
 ```
-Error: gui build did not produce index.js
+
+### 1.3. Node.js version sai — dùng system Node thay vì conda
+
+**Triệu chứng:** Build chạy được nhưng native modules lỗi khi runtime, hoặc
+`EBADENGINE` warnings với wrong version.
+
+**Kiểm tra:**
+```bash
+# System Node (KHÔNG dùng để build)
+node --version       # có thể là v18, v22, hay bất kỳ
+
+# Conda Node (PHẢI dùng)
+conda run -n node20 node --version   # phải là v20.x
 ```
 
-**Nguyên nhân**: GUI chưa được build hoặc build lỗi.
-**Xử lý**:
-```powershell
-cd gui
+**Fix:** Luôn prefix commands với `conda run -n node20`:
+```bash
+# ĐÚNG
+conda run -n node20 npm install
+conda run -n node20 npm run build
+
+# SAI — dùng system Node
 npm install
 npm run build
 ```
 
-### 2.4. vsce package thất bại
+### 1.4. `EBADENGINE` warnings khi build
 
-**Hiện tượng**:
+```
+npm warn EBADENGINE Unsupported engine { required: { node: '>=20.20.1' }, current: { node: 'v20.17.0' } }
+```
+
+**Đánh giá:** Warning này **không gây lỗi build** — conda `node20` cài v20.17.0, project
+yêu cầu >=20.20.1. Bỏ qua warning này là được, build vẫn thành công.
+
+---
+
+## 2. Lỗi npm install
+
+### 2.1. `EINTEGRITY` — cache corrupt
+
+```
+npm ERR! code EINTEGRITY
+npm ERR! Verification failed while extracting ...
+```
+
+**Fix:**
+```bash
+conda run -n node20 npm cache clean --force
+conda run -n node20 npm install
+```
+
+### 2.2. `ERESOLVE` — peer dependency conflict
+
+```
+npm ERR! Could not resolve dependency: peerOptional @types/node@"^18||^20||>=22"
+```
+
+**Fix:**
+```bash
+conda run -n node20 npm install --legacy-peer-deps
+```
+
+### 2.3. Network timeout / fetch failed (qua Nexus)
+
+```
+npm ERR! network timeout at: http://localhost:7081/repository/npm-group/...
+```
+
+**Fix:**
+```bash
+# Kiểm tra Nexus accessible
+curl -s http://localhost:7081/service/rest/v1/status | python3 -c "import sys,json; print(json.load(sys.stdin))"
+
+# Tăng timeout
+conda run -n node20 npm config set fetch-timeout 120000
+conda run -n node20 npm config set fetch-retries 5
+
+# .npmrc phải trỏ đúng Nexus
+cat ~/.npmrc
+# registry=http://localhost:7081/repository/npm-group/
+```
+
+### 2.4. `Cannot find module` sau npm install
+
+```
+Error: Cannot find module '@continuedev/config-types'
+```
+
+**Nguyên nhân:** Build sai thứ tự — package dependency chưa build.
+
+**Fix:** Build đúng thứ tự dependency chain (xem `01-build-guide.md` section 3):
+```bash
+# Build packages trước, theo thứ tự
+conda run -n node20 bash -c "cd packages/config-types && npm run build"
+conda run -n node20 bash -c "cd packages/fetch && npm run build"
+# ... tiếp theo
+```
+
+---
+
+## 3. Lỗi build (compile)
+
+### 3.1. TypeScript error
+
+```
+src/file.ts:XX:YY - error TS2322: Type 'X' is not assignable to type 'Y'
+```
+
+**Đánh giá trước:** Kiểm tra có phải do conflict với upstream change không:
+```bash
+git diff upstream/main -- <file>
+```
+
+**Fix:**
+- Nếu do patch conflict: resolve thủ công, giữ custom logic
+- Nếu do type mismatch: thêm type assertion hoặc `// @ts-ignore`
+- Nếu không rõ nguyên nhân: `"skipLibCheck": true` trong tsconfig.json (tạm thời)
+
+### 3.2. `prepackage` thất bại — GUI chưa build
+
+```
+Error: gui build did not produce index.js
+```
+
+**Fix:**
+```bash
+conda run -n node20 bash -c "cd gui && npm install && npm run build"
+```
+
+### 3.3. `vsce package` thất bại — thiếu icon
+
 ```
 Error: Missing extension icon
-Error: ENOENT: no such file or directory, open '...media/icon.png'
 ```
 
-**Xử lý**:
-```powershell
-# Kiểm tra file icon
-Test-Path extensions/vscode/media/icon.png
-
-# Nếu thiếu, tạo file icon tối thiểu
-# Hoặc comment dòng "icon" trong extensions/vscode/package.json
+**Fix:**
+```bash
+ls extensions/vscode/media/icon.png
+# Nếu thiếu, tạm thời comment dòng "icon" trong extensions/vscode/package.json
 ```
 
 ---
 
-## 3. Lỗi runtime (sau khi install)
+## 4. Lỗi runtime sau install
 
-### 3.1. Extension không load / UI stuck
+### 4.1. Extension không load / UI stuck loading mãi
 
-**Hiện tượng**: VSCode mở nhưng Continue panel không hiện hoặc hiện loading mãi.
+**Nguyên nhân phổ biến:** Native modules sai platform.
 
-**Nguyên nhân** (theo kinh nghiệm từ .patches/03-upstream-sync-strategy.md):
-- Native modules sai platform (ví dụ: build trên Linux copy sang Windows)
-- `onnxruntime-node` binary sai OS
-- `@lancedb/vectordb` binary sai platform
+**Nguyên lý:** `onnxruntime-node`, `@lancedb/vectordb` được copy từ `node_modules` của
+host lúc build → nếu build trên Linux nhưng install trên Windows → crash silently.
 
-**Xử lý**:
-```powershell
-# 1. Uninstall extension cũ
-code --uninstall-extension continue
-
-# 2. Build lại đúng trên Windows (không cross-platform)
-.\scripts\build-all.ps1
-
-# 3. Install lại
-code --install-extension extensions\vscode\build\continue-win32-x64-2.0.5.vsix --force
-
-# 4. Reload VSCode
-# Ctrl+Shift+P → Developer: Reload Window
+**Kiểm tra:**
+```bash
+# Xem VSIX được build trên platform nào
+ls extensions/vscode/build/
+# continue-linux-x64-2.1.1.vsix → chỉ chạy trên Linux
+# continue-win32-x64-2.1.1.vsix → chỉ chạy trên Windows
 ```
 
-### 3.2. Lỗi "Cannot find module" khi chạy
+**Fix:** Build lại đúng trên target platform:
+```bash
+# Trên WSL → dùng cho Linux
+conda run -n node20 bash -c "cd extensions/vscode && npm run prepackage -- --target linux-x64 && npm run package -- --target linux-x64"
 
-**Hiện tượng**: Extension load được nhưng có lỗi trong Console.
-
-**Xử lý**:
-```powershell
-# Mở VSCode Developer Console
-# Ctrl+Shift+P → Developer: Toggle Developer Tools
-# Xem tab Console để biết lỗi chi tiết
+# Trên Windows → dùng cho Windows  
+# (phải chạy PowerShell trên Windows host, không phải WSL)
+npm run prepackage -- --target win32-x64
+npm run package -- --target win32-x64
 ```
 
-### 3.3. Config không load được
+### 4.2. Extension load nhưng không kết nối model
 
-**Hiện tượng**: Extension mở được nhưng không kết nối được model.
+**Kiểm tra theo thứ tự:**
+```bash
+# 1. Model server running?
+curl http://your-nim-server/v1/models
 
-**Xử lý**:
-1. Kiểm tra file config: `Ctrl+Shift+P` → `Continue: Open config file`
-2. Kiểm tra `apiBase` có đúng URL server không
-3. Kiểm tra network: `curl http://your-server:port/v1/models`
+# 2. TLS cert issue?
+curl -k https://your-nim-server/v1/models   # -k = skip verify
 
----
+# 3. Config file đúng chưa?
+# Ctrl+Shift+P → Continue: Open config file
+# Kiểm tra apiBase, apiKey
 
-## 4. Lỗi liên quan đến Git
-
-### 4.1. Patches bị mất sau khi merge/pull
-
-**Hiện tượng**: Sau khi `git pull` hoặc `git merge`, các custom patches biến mất.
-
-**Xử lý**:
-```powershell
-# Kiểm tra patches
-Select-String -Path packages/openai-adapters/src/apis/OpenAI.ts -Pattern "Retry without tools"
-Select-String -Path core/llm/openaiTypeConverters.ts -Pattern "Sanitize arguments"
-
-# Nếu mất, apply lại từ .patches/
-# Xem hướng dẫn trong .patches/03-upstream-sync-strategy.md
+# 4. Patch TLS còn không?
+grep "rejectUnauthorized\|verifySsl" packages/fetch/src/getAgentOptions.ts
 ```
 
-### 4.2. Conflict khi rebase
+### 4.3. Response blank / empty (NIM/vLLM)
 
-**Hiện tượng**: `git rebase` báo conflict ở các file đã patch.
+**Nguyên nhân:** Patch #1 (NIM empty response retry) bị mất sau sync upstream.
 
-**Xử lý**:
-```powershell
-# Xem file conflict
-git diff --name-only --diff-filter=U
-
-# Resolve thủ công, sau đó
-git add <file>
-git rebase --continue
+**Kiểm tra:**
+```bash
+grep -c "retry\|without.*tools" packages/openai-adapters/src/apis/OpenAI.ts
+# Expected: >= 1, nếu 0 → patch bị mất
 ```
+
+**Fix:** Xem `.patches/01-nim-empty-response-retry.md` để re-apply patch.
 
 ---
 
 ## 5. Lỗi môi trường
 
-### 5.1. PowerShell execution policy
+### 5.1. PowerShell execution policy (Windows)
 
-**Hiện tượng**:
 ```
-.\scripts\build-all.ps1 : File cannot be loaded because running scripts is disabled on this system.
+.\scripts\build-all.ps1 cannot be loaded because running scripts is disabled
 ```
 
-**Xử lý**:
+**Fix:**
 ```powershell
-# Kiểm tra policy hiện tại
-Get-ExecutionPolicy
-
-# Cho phép chạy script (Admin required)
 Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
-
-# Hoặc chạy với bypass
+# Hoặc chạy với bypass:
 powershell -ExecutionPolicy Bypass -File .\scripts\build-all.ps1
 ```
 
-### 5.2. Path quá dài (MAX_PATH)
+### 5.2. Path quá dài — MAX_PATH (Windows)
 
-**Hiện tượng**: Lỗi không tạo được file/folder do path > 260 ký tự.
+**Triệu chứng:** Lỗi khi tạo file/folder do path > 260 ký tự trong `node_modules`.
 
-**Xử lý**:
+**Fix:**
 ```powershell
-# Kiểm tra và enable long path support
-# Hoặc clone ở thư mục ngắn hơn, ví dụ: C:\dev\continue
+# Enable long path support (Admin)
+New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" `
+  -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
 ```
 
-### 5.3. Anti-virus chặn npm
+Hoặc clone repo vào path ngắn hơn: `C:\dev\continue`.
 
-**Hiện tượng**: npm install chậm hoặc thất bại do anti-virus scan.
+### 5.3. File permission issues (WSL ↔ Windows)
 
-**Xử lý**: Thêm exclusion cho thư mục project trong Windows Defender / anti-virus.
+**Triệu chứng:** `git status` hiển thị hàng trăm files "modified" dù không sửa gì.
 
----
-
-## 6. Diagnostic commands
-
-### 6.1. Kiểm tra môi trường
-
-```powershell
-# Node
-node --version
-npm --version
-
-# Git
-git --version
-
-# VSCode
-code --version
-
-# PowerShell
-$PSVersionTable.PSVersion
-
-# System
-[System.Environment]::OSVersion.VersionString
+**Fix:**
+```bash
+git config core.fileMode false
 ```
 
-### 6.2. Kiểm tra build output
+### 5.4. Build chậm bất thường trên `/mnt/e/` (WSL)
 
-```powershell
-# VSIX file
-Get-ChildItem extensions\vscode\build\*.vsix
+**Nguyên nhân:** Cross-filesystem I/O (WSL ↔ Windows NTFS) chậm hơn Linux native ~5-10x.
 
-# Native modules
-Get-ChildItem extensions\vscode\bin\napi-v3\win32-x64\
-
-# Extension install
-code --list-extensions | Select-String "continue"
-```
-
-### 6.3. Kiểm tra patches
-
-```powershell
-Write-Host "Patch 1 (NIM retry):"
-Select-String -Path packages/openai-adapters/src/apis/OpenAI.ts -Pattern "Retry without tools" -SimpleMatch | ForEach-Object { "  Found at line $($_.LineNumber)" }
-
-Write-Host "Patch 2 (JSON sanitize):"
-Select-String -Path core/llm/openaiTypeConverters.ts -Pattern "Sanitize arguments" -SimpleMatch | ForEach-Object { "  Found at line $($_.LineNumber)" }
-
-Write-Host "Patch 3 (Vision Proxy):"
-if (Test-Path core/llm/visionProxy.ts) { "  visionProxy.ts: EXISTS" } else { "  visionProxy.ts: MISSING" }
-
-Write-Host "Patch 4 (TLS):"
-Select-String -Path extensions/vscode/src/extension.ts -Pattern "NODE_TLS_REJECT_UNAUTHORIZED" -SimpleMatch | ForEach-Object { "  Found at line $($_.LineNumber)" }
+**Fix:** Copy repo sang Linux filesystem để build nhanh hơn:
+```bash
+cp -r /mnt/e/08-Sources/1.AI/continue ~/continue-src
+cd ~/continue-src
+conda run -n node20 bash -c '...'
+# Copy VSIX về sau khi build
+cp extensions/vscode/build/*.vsix /mnt/e/08-Sources/1.AI/continue/extensions/vscode/build/
 ```
 
 ---
 
-## 7. Khi nào cần build lại từ đầu
+## 6. Patch bị mất sau git operations
 
-Build lại từ đầu nếu:
-- Thay đổi code trong packages/core/gui
-- Update upstream (sync với continuedev/continue)
-- Chuyển sang máy tính khác / OS khác
-- Native modules bị corrupt
-- Extension không hoạt động sau install
+### 6.1. Kiểm tra tất cả patches
 
-```powershell
-# Clean toàn bộ node_modules
-Get-ChildItem -Path . -Directory -Recurse -Filter node_modules | Remove-Item -Recurse -Force
+```bash
+cd /mnt/e/08-Sources/1.AI/continue
 
-# Build lại
-.\scripts\build-all.ps1
+echo "=== Patch verification ==="
+
+echo "1. NIM empty response retry:"
+grep -c "retry\|without.*tools" packages/openai-adapters/src/apis/OpenAI.ts
+# Expected: >= 1
+
+echo "2. JSON sanitize:"
+grep -c "sanitize\|JSON.parse" core/llm/openaiTypeConverters.ts
+# Expected: >= 1
+
+echo "3. Vision proxy:"
+test -f core/llm/visionProxy.ts && echo "OK" || echo "MISSING"
+
+echo "4. TLS fix:"
+grep -c "rejectUnauthorized\|verifySsl" packages/fetch/src/getAgentOptions.ts
+# Expected: >= 1
+
+echo "5. Context usage:"
+grep -c "contextUsage\|ContextStatus" gui/src/components/mainInput/ContextStatus.tsx
+# Expected: >= 1
+```
+
+### 6.2. Nếu patch bị mất sau rebase
+
+```bash
+# Xem commit nào chứa patch
+git log --oneline develop | head -20
+
+# Cherry-pick lại nếu cần
+git cherry-pick <patch-commit-hash>
+
+# Hoặc xem diff để re-apply thủ công
+git show <patch-commit-hash> -- packages/openai-adapters/src/apis/OpenAI.ts
+```
+
+---
+
+## 7. Quick diagnostics
+
+```bash
+# Full environment check
+echo "=== Node.js (conda) ===" && conda run -n node20 node --version
+echo "=== npm (conda) ===" && conda run -n node20 npm --version
+echo "=== Git ===" && git --version
+echo "=== Branch ===" && git branch --show-current
+echo "=== Last commit ===" && git log --oneline -1
+echo "=== VSIX files ===" && ls -lh extensions/vscode/build/*.vsix 2>/dev/null || echo "No VSIX built yet"
+echo "=== Extension installed ===" && code --list-extensions 2>/dev/null | grep -i continue || echo "Not installed"
 ```

@@ -16,6 +16,7 @@
 6. [Làm việc với maintainer](#6-làm-việc-với-maintainer)
 7. [Các lỗi thường gặp và cách tránh](#7-các-lỗi-thường-gặp-và-cách-tránh)
 8. [Quick Reference](#8-quick-reference)
+9. [Tooling Setup — gh CLI và prettier](#9-tooling-setup--gh-cli-và-prettier)
 
 ---
 
@@ -72,10 +73,17 @@ git config core.fileMode
 # false
 ```
 
-> **Tại sao cần tắt fileMode?**
-> Khi clone repo từ Linux/Mac về Windows, git phát hiện permission bit thay đổi
-> (100755 → 100644) và đánh dấu hàng chục file là "modified" dù nội dung không đổi.
-> Tắt `fileMode` loại bỏ noise này.
+> **⚠️ QUAN TRỌNG — Email commit phải khớp với GitHub account:**
+> CLA bot verify email của committer. Nếu email commit ≠ email GitHub account → CLA fail dù đã comment ký.
+>
+> ```bash
+> git config user.email "thanhnn.ict@gmail.com"
+> git config user.name "Nam Thanh Nguyen"
+>
+> # Fix commits đã sai email (trước khi push)
+> git rebase upstream/main --exec 'git commit --amend --reset-author --no-edit'
+> git push origin <branch> --force-with-lease
+> ```
 
 ### 2.3. Fetch upstream để có code mới nhất
 
@@ -258,7 +266,33 @@ Sau khi tạo PR, GitHub Actions tự động chạy các checks:
 ⚪       PR Checks / jetbrains-tests      ← JetBrains plugin tests
 ```
 
-### 5.2. Ký CLA — bắt buộc, làm ngay
+### 5.2. Cài gh CLI (nếu chưa có)
+
+**Trong WSL qua Nexus (Nexus repo `github-cli-apt` đã tạo sẵn):**
+
+```bash
+curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
+  -o /tmp/githubcli-keyring.gpg
+sudo cp /tmp/githubcli-keyring.gpg /usr/share/keyrings/githubcli-archive-keyring.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg trusted=yes] \
+  http://localhost:7081/repository/github-cli-apt stable main" \
+  | sudo tee /etc/apt/sources.list.d/github-cli.list
+sudo apt-get update -o Dir::Etc::sourcelist="sources.list.d/github-cli.list" \
+  -o Dir::Etc::sourceparts="-" -o APT::Get::List-Cleanup="0"
+sudo apt-get install -y gh
+```
+
+**Auth với Classic PAT:**
+
+```bash
+# Classic PAT scope cần: repo, write:discussion
+gh auth login --with-token <<< "ghp_YOUR_TOKEN"
+gh auth status  # kiểm tra scopes
+```
+
+> **Lưu ý:** Fine-grained PAT không có `X-OAuth-Scopes` header và có thể thiếu permission `Pull requests: Write` → dùng **Classic PAT**.
+
+### 5.3. Ký CLA — bắt buộc, làm ngay
 
 CLA (Contributor License Agreement) là thỏa thuận bạn trao quyền cho project
 sử dụng code bạn đóng góp. **Phải ký trước khi PR có thể merge**.
@@ -285,7 +319,38 @@ recheck
 > **Lưu ý:** CLA chỉ cần ký **một lần** cho toàn bộ repo. Các PR sau sẽ tự pass.
 > Nếu đã ký rồi mà check vẫn fail, comment `recheck` là đủ.
 
-### 5.3. Phân tích CI failure — cái nào liên quan code bạn?
+**Ký CLA hàng loạt bằng gh CLI:**
+
+```bash
+CLA="I have read the CLA Document and I hereby sign the CLA"
+for pr in 13091 13092 13093; do
+  gh pr comment $pr --repo continuedev/continue --body "$CLA"
+done
+```
+
+> **Nếu CLA fail sau khi push commit mới:** Bot re-run và cần ký lại — comment thêm lần nữa là đủ. Chữ ký cũ vẫn giữ trong branch `cla-signatures`.
+
+### 5.4. Fix prettier-check fail
+
+Continue enforce prettier formatting. Check sẽ fail nếu code không đúng format.
+
+```bash
+# Cài prettier vào /tmp (không cần full npm install workspace)
+mkdir -p /tmp/prettier-tools && cd /tmp/prettier-tools
+conda run -n node20 npm install \
+  --registry http://localhost:7081/repository/npm-group/ \
+  prettier@3.3.3 prettier-plugin-tailwindcss@0.6.8
+
+# Check
+conda run -n node20 node_modules/.bin/prettier --check /path/to/file.tsx
+
+# Fix
+conda run -n node20 node_modules/.bin/prettier --write /path/to/file.tsx
+```
+
+> Cần cài cả `prettier-plugin-tailwindcss` vì `.prettierrc` require plugin này.
+
+### 5.5. Phân tích CI failure — cái nào liên quan code bạn?
 
 Khi CI fail, cần phân biệt 2 trường hợp:
 
@@ -314,7 +379,7 @@ git diff upstream/main...HEAD --name-only
 - Tests failing: `jetbrains-tests`, `CLI macos tests`
 - **Kết luận:** Không liên quan → flaky CI upstream
 
-### 5.4. Comment hỏi maintainer khi CI fail không liên quan
+### 5.6. Comment hỏi maintainer khi CI fail không liên quan
 
 ```
 Hi @continuedev/maintainers,
@@ -441,7 +506,33 @@ foreach ($b in $toDelete) { git push origin --delete $b }
 **Ngăn tái phát:** Vào GitHub → Settings → Code security and analysis → tắt
 Dependabot và Snyk integration.
 
-### Lỗi 5: Push nhầm vào upstream thay vì origin
+### Lỗi 5: Email commit không khớp GitHub account → CLA fail mãi
+
+**Triệu chứng:** CLA bot báo `Committers of Pull Request number XXXXX have to sign the CLA` dù đã comment ký nhiều lần.
+
+**Nguyên nhân:** `git config user.email` chưa set trong WSL → mặc định `you@example.com`.
+
+**Fix:**
+```bash
+# Set đúng email
+git config user.email "thanhnn.ict@gmail.com"
+git config user.name "Nam Thanh Nguyen"
+
+# Amend tất cả commits sai author
+git rebase upstream/main --exec 'git commit --amend --reset-author --no-edit'
+# Nếu gặp empty commit → thêm --allow-empty
+git commit --amend --reset-author --no-edit --allow-empty
+git rebase --continue
+
+# Force push (thêm history đã thay đổi)
+git push origin <branch> --force-with-lease
+
+# Ký CLA lại
+gh pr comment <pr> --repo continuedev/continue \
+  --body "I have read the CLA Document and I hereby sign the CLA"
+```
+
+### Lỗi 6: Push nhầm vào upstream thay vì origin
 
 ```bash
 # Kiểm tra trước khi push
@@ -511,9 +602,63 @@ git push -u origin fix/ten-van-de
 
 | PR | Branch | File thay đổi | Type |
 |----|--------|---------------|------|
-| #13091 | `fix/empty-response-retry` | `packages/openai-adapters/src/apis/OpenAI.ts` | Bug fix NIM/vLLM empty response |
-| #13092 | `fix/sanitize-tool-arguments` | `core/llm/openaiTypeConverters.ts` | Bug fix malformed JSON tool args |
-| #13089 | `feat/always-on-context-usage` | GUI components | Feature context usage display |
+| [#13091](https://github.com/continuedev/continue/pull/13091) | `fix/empty-response-retry` | `packages/openai-adapters/src/apis/OpenAI.ts` | Bug fix NIM/vLLM empty response |
+| [#13092](https://github.com/continuedev/continue/pull/13092) | `fix/sanitize-tool-arguments` | `core/llm/openaiTypeConverters.ts` | Bug fix malformed JSON tool args |
+| [#13093](https://github.com/continuedev/continue/pull/13093) | `feat/always-on-context-usage` | GUI components | Feature context usage display |
+
+---
+
+## 9. Tooling Setup — gh CLI và prettier
+
+### gh CLI trong WSL
+
+```bash
+# Kiểm tra đã cài chưa
+gh --version
+# gh version 2.97.0 (2026-07-31)
+
+# Kiểm tra auth
+gh auth status
+# ✓ Logged in to github.com account thanhnnict
+# ✓ Token scopes: '...repo...write:discussion...'
+
+# Nếu chưa auth (PAT lưu trong ~/.env)
+gh auth login --with-token <<< "ghp_YOUR_CLASSIC_PAT"
+```
+
+> **Classic PAT** (không phải Fine-grained) với scope `repo` + `write:discussion`.
+> Fine-grained PAT thiếu permission comment PR → `gh pr comment` fail.
+
+### conda env `node20`
+
+```bash
+# Kiểm tra
+conda env list | grep node20
+
+# Tạo mới nếu chưa có
+conda create -n node20 -y nodejs=20
+
+# Verify
+conda run -n node20 node --version  # v20.17.0
+conda run -n node20 npm --version   # 10.8.2
+```
+
+### prettier tools
+
+```bash
+# Cài vào /tmp/prettier-tools để tái sử dụng
+ls /tmp/prettier-tools/node_modules/.bin/prettier 2>/dev/null || {
+  mkdir -p /tmp/prettier-tools && cd /tmp/prettier-tools
+  conda run -n node20 npm install \
+    --registry http://localhost:7081/repository/npm-group/ \
+    prettier@3.3.3 prettier-plugin-tailwindcss@0.6.8
+}
+
+# Check & fix formatting
+cd /tmp/prettier-tools
+conda run -n node20 node_modules/.bin/prettier --check /path/to/file.tsx
+conda run -n node20 node_modules/.bin/prettier --write /path/to/file.tsx
+```
 
 ---
 

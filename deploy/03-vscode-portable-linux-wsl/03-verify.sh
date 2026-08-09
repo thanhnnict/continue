@@ -79,10 +79,10 @@ fi
 # 5. Continue config
 echo ""
 echo "[ Continue Config ]"
-if [[ -f "${CONTINUE_CONFIG}/config.yaml" ]]; then
-  pass "WSL config: ${CONTINUE_CONFIG}/config.yaml"
+if [[ -f "${HOME}/.continue/config.yaml" ]]; then
+  pass "WSL config: ${HOME}/.continue/config.yaml"
 else
-  warn "WSL config not found at $CONTINUE_CONFIG — run 02-install-continue.sh"
+  warn "~/.continue/config.yaml not found — run 02-install-continue.sh"
 fi
 
 # 6. Node.js (for build)

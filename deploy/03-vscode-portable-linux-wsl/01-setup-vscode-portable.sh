@@ -108,25 +108,32 @@ info "Creating wrapper: $WRAPPER"
 cat > "$WRAPPER" << 'WRAPPER_EOF'
 #!/usr/bin/env bash
 # code-wsl — Launch VSCode Linux Portable in WSL
-# Wrapper để tránh conflict với lệnh 'code' (VSCode Windows Remote WSL)
+# Wrapper tránh conflict với 'code' (VSCode Windows Remote WSL)
+#
+# Portable mode: luôn inject --extensions-dir và --user-data-dir
+# Áp dụng cả GUI launch lẫn CLI (--install-extension, --list-extensions...)
 
 VSCODE_DIR="${HOME}/.apps/vscode-linux"
 BINARY="${VSCODE_DIR}/code"
+EXTENSIONS_DIR="${VSCODE_DIR}/data/extensions"
+USER_DATA_DIR="${VSCODE_DIR}/data/user-data"
 
 if [[ ! -f "$BINARY" ]]; then
   echo "ERROR: VSCode Linux not found at $VSCODE_DIR"
-  echo "Run: bash deploy/linux-wsl/01-setup-vscode-portable.sh"
+  echo "Run: bash deploy/03-vscode-portable-linux-wsl/01-setup-vscode-portable.sh"
   exit 1
 fi
 
-# WSLg DISPLAY check
+# WSLg DISPLAY
 if [[ -z "${DISPLAY:-}" ]]; then
   export DISPLAY=:0
 fi
 
-# Launch VSCode với portable data dir đã được set qua folder structure
-# --no-sandbox cần thiết trong một số WSL environments
-exec "$BINARY" --no-sandbox "$@"
+exec "$BINARY" \
+  --extensions-dir "$EXTENSIONS_DIR" \
+  --user-data-dir  "$USER_DATA_DIR" \
+  --no-sandbox \
+  "$@"
 WRAPPER_EOF
 chmod +x "$WRAPPER"
 success "Wrapper created: $WRAPPER"

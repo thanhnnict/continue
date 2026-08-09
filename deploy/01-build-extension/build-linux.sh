@@ -48,6 +48,14 @@ echo ""
 
 cd "$REPO_ROOT"
 
+# --- Run pre-install if ripgrep not ready ---
+RIPGREP_CHECK="extensions/vscode/node_modules/@vscode/ripgrep/bin/rg"
+if [[ "$TARGET" == "win32-x64" ]]; then RIPGREP_CHECK="${RIPGREP_CHECK}.exe"; fi
+if [[ ! -e "$RIPGREP_CHECK" ]]; then
+  warn "ripgrep binary missing — running pre-install first..."
+  bash "$(dirname "${BASH_SOURCE[0]}")/00-pre-install.sh" --target "$TARGET"
+fi
+
 # --- Verify conda node20 ---
 info "Checking conda env 'node20'..."
 if ! conda env list 2>/dev/null | grep -q "^node20"; then

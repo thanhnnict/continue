@@ -63,16 +63,23 @@ release/v2.1.x-onprem  ←── stable snapshot, build VSIX deploy
 | 5 | — | `gui/src/components/StepContainer/ResponseActions.tsx`, `gui/src/components/mainInput/ContextStatus.tsx` | UX | Always-on context usage display với sub-1% precision |
 | 6 | — | `core/llm/toolSupport.ts` | Tool support | Cải thiện tool support compatibility |
 | 7 | — | `packages/config-yaml/src/schemas/models.ts` | Config | Model schema adjustments |
-| 8 | — | `extensions/vscode/scripts/package.js`, `extensions/vscode/package.json` | Build | Custom version scheme `2.x.y`, build scripts |
+| 8 | `08-tls-self-signed-fix.md` | `packages/fetch/src/getAgentOptions.ts`, `extensions/vscode/src/extension.ts` | TLS self-signed | Default `rejectUnauthorized: false` + `NODE_TLS_REJECT_UNAUTHORIZED=0` cho on-prem |
 
 ### Documentation only (no code change)
 
 | File | Nội dung |
 |------|---------|
-| `03-upstream-sync-strategy.md` | Chiến lược sync với upstream, git-flow, versioning, build guide |
+| `03-upstream-sync-strategy.md` | Chiến lược sync với upstream, git-flow, versioning |
 | `05-performance-monitoring.md` | Performance monitoring setup cho 300+ users |
 | `06-capacity-planning-300-users.md` | Capacity planning — infrastructure sizing |
 | `07-huong-dan-dong-gop-pr-cong-dong.md` | Hướng dẫn đóng góp PR lên upstream, tooling setup |
+
+### Build & Deploy documentation (in `deploy/docs/`)
+
+| File | Nội dung |
+|------|---------|
+| `deploy/docs/01-build-guide.md` | Hướng dẫn build VSIX cho Windows/WSL |
+| `deploy/docs/02-build-troubleshooting.md` | Troubleshooting build issues |
 
 ---
 
@@ -182,10 +189,17 @@ Tăng PATCH +1 mỗi lần build có thay đổi code. Reset về `.1` khi sync 
 
 ## Tài liệu chi tiết
 
+**Patch documentation (`.patches/`):**
 - [`01-nim-empty-response-retry.md`](./01-nim-empty-response-retry.md) — Patch #1: NIM/vLLM empty response
 - [`02-tool-arguments-json-sanitize.md`](./02-tool-arguments-json-sanitize.md) — Patch #2: JSON sanitize
-- [`03-upstream-sync-strategy.md`](./03-upstream-sync-strategy.md) — Git workflow, sync, build, versioning
+- [`03-upstream-sync-strategy.md`](./03-upstream-sync-strategy.md) — Git workflow, sync, versioning
 - [`04-vision-proxy.md`](./04-vision-proxy.md) — Patch #3: Vision proxy
 - [`05-performance-monitoring.md`](./05-performance-monitoring.md) — Performance monitoring
 - [`06-capacity-planning-300-users.md`](./06-capacity-planning-300-users.md) — Capacity planning
 - [`07-huong-dan-dong-gop-pr-cong-dong.md`](./07-huong-dan-dong-gop-pr-cong-dong.md) — PR contribution guide
+- [`08-tls-self-signed-fix.md`](./08-tls-self-signed-fix.md) — Patch #4: TLS self-signed cert fix
+
+**Build & Deploy documentation (`deploy/`):**
+- [`deploy/README.md`](../deploy/README.md) — Air-gap deployment guide
+- [`deploy/docs/01-build-guide.md`](../deploy/docs/01-build-guide.md) — Hướng dẫn build VSIX
+- [`deploy/docs/02-build-troubleshooting.md`](../deploy/docs/02-build-troubleshooting.md) — Troubleshooting build

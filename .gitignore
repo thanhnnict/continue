@@ -182,6 +182,13 @@ keys
 
 # Local bare repo & ignored folders
 .bare-repo.git/
+
+# Deploy artifacts (air-gap packaging — generated binaries, not source)
+# Source code trong deploy/ được track; artifacts/binaries bị ignore
+deploy/package/
+deploy/vscode-portable/
+deploy.zip
+*.vsix
 *.exe
 *.dll
 *.dylib

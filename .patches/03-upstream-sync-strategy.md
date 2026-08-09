@@ -4,6 +4,8 @@
 
 Strategy để maintain custom Continue extension fork khi upstream `continuedev/continue` release updates, phục vụ ~300+ developer users.
 
+> **Cập nhật 2026-08-09**: Đã migrate từ `main` (base v2.0.0) sang git-flow pattern với `develop` + `release/v2.1.x-onprem`.
+
 ---
 
 ## 1. Git Workflow
@@ -11,379 +13,343 @@ Strategy để maintain custom Continue extension fork khi upstream `continuedev
 ### Repository Setup
 
 ```bash
-cd ~/.continue/continue-src
+cd /mnt/e/08-Sources/1.AI/continue  # WSL path
 
-# Current state
+# Remotes
 git remote -v
-# origin → (your fork or local)
-
-# Add upstream remote
-git remote add upstream https://github.com/continuedev/continue.git
-
-# Verify
-git remote -v
-# origin   → your-org/continue (push/fetch)
-# upstream → continuedev/continue (fetch only)
+# origin   → https://github.com/thanhnnict/continue (fork)
+# upstream → https://github.com/continuedev/continue (read-only)
 ```
 
-### Branch Strategy
+### Branch Strategy (Git-Flow)
 
 ```
-main (or release-v2.x.x)     ← production branch, deployed to users
-├── patches/nim-empty-retry   ← patch #1 as isolated branch
-├── patches/json-sanitize     ← patch #2 as isolated branch
-└── upstream/main             ← tracking upstream
+upstream/main                  ← tracking upstream continuedev/continue
+      │
+      ▼
+  develop                      ← làm việc chính — upstream/main + custom patches
+      │                           phát triển features cho khách hàng
+      │                           KHÔNG push force trừ khi rebase upstream
+      ▼
+release/v2.1.x-onprem          ← stable snapshot — build VSIX deploy
+      │                           merge từ develop khi stable
+      ▼
+   [VSIX build]                ← deploy cho ~300 developers
 ```
+
+**Các branch PR lên upstream (tạo từ upstream/main, không từ develop):**
+
+```
+upstream/main
+  ├── fix/empty-response-retry        → PR #13091 (OPEN)
+  ├── fix/sanitize-tool-arguments     → PR #13092 (OPEN)
+  └── feat/always-on-context-usage    → PR #13093 (OPEN)
+```
+
+**Branch `main`**: Giữ làm archive của custom build v2.0.x (base `release/v2.0.0-vscode`). Không dùng làm working branch nữa.
+
+> **Lưu ý**: `git checkout main` sẽ báo warning `refname 'main' is ambiguous` do trùng tên với tag upstream.
+> Dùng `git checkout refs/heads/main` hoặc `git push origin refs/heads/main:refs/heads/main` khi cần.
 
 ---
 
-## 2. Sync Process (khi upstream release mới)
+## 2. Sync Process (khi upstream có commits mới)
 
-### Step 1: Fetch upstream changes
+### Step 1: Fetch upstream
 
 ```bash
-git fetch upstream
-git log --oneline upstream/main -10  # Review what's new
+cd /mnt/e/08-Sources/1.AI/continue
+git fetch upstream refs/heads/main:refs/remotes/upstream/main
+
+# Xem có gì mới
+git log --oneline upstream/main -10
+
+# Xem có bao nhiêu commit mới so với develop
+git log --oneline develop..upstream/main | wc -l
 ```
 
-### Step 2: Check if our patches conflict
+### Step 2: Kiểm tra conflict trước khi rebase
 
 ```bash
-# Create temp branch from upstream
-git checkout -b temp-merge upstream/main
+# Test rebase không commit — xem có conflict không
+git checkout develop
+git rebase --no-commit upstream/main 2>&1 | head -20
 
-# Try applying our patches
-git cherry-pick <patch-1-commit-hash>
-git cherry-pick <patch-2-commit-hash>
-
-# If conflicts → resolve manually
-# If clean → good to go
-```
-
-### Step 3: Merge or Rebase
-
-**Option A: Rebase (cleaner history)**
-
-```bash
-git checkout main
-git rebase upstream/main
-# Resolve conflicts in patch files if any
-```
-
-**Option B: Merge (safer, preserves history)**
-
-```bash
-git checkout main
-git merge upstream/main
-# Resolve conflicts
-```
-
-### Step 4: Verify patches still work
-
-```bash
-# Check patch 1
-grep -c "Retry without tools" packages/openai-adapters/src/apis/OpenAI.ts
-# Expected: 1
-
-# Check patch 2
-grep -c "Sanitize arguments" core/llm/openaiTypeConverters.ts
-# Expected: 1
-
-# Build test
-conda run -n node20 bash -c 'cd packages/openai-adapters && npm run build'
-conda run -n node20 bash -c 'cd core && npm run build'
-```
-
-### Step 5: Rebuild & Deploy
-
-```bash
-cd extensions/vscode
-conda run -n node20 npm run prepackage -- --target darwin-arm64
-conda run -n node20 npm run package -- --target darwin-arm64
-# Install & test
-```
-
----
-
-## 3. When Patches Become Unnecessary
-
-### Patch 01 (Empty Response Retry)
-
-**Remove when ANY of:**
-
-- Continue adds built-in handling for `content:null` + `tool_calls:[]`
-- NIM/vLLM servers fix their behavior (return content when no tool needed)
-- PR #12591 or equivalent is merged upstream
-
-**How to check:**
-
-```bash
-# If upstream has similar logic
-grep -r "tool_calls.*length.*0\|retry.*without.*tools" packages/openai-adapters/src/
-```
-
-### Patch 02 (JSON Sanitize)
-
-**Remove when ANY of:**
-
-- vLLM stops validating tool_calls arguments in history messages (vllm#43995 fixed)
-- Continue adds argument validation upstream
-- All models reliably generate valid JSON (unlikely near-term)
-
-**How to check:**
-
-```bash
-# If upstream validates arguments
-grep -r "JSON.parse.*arguments\|sanitize.*args" core/llm/
-```
-
----
-
-## 4. Automated Sync Check (CI/CD suggestion)
-
-### Weekly check script
-
-```bash
-#!/bin/bash
-# .patches/scripts/check-upstream.sh
-
-cd ~/.continue/continue-src
-git fetch upstream 2>/dev/null
-
-LOCAL=$(git rev-parse HEAD)
-UPSTREAM=$(git rev-parse upstream/main)
-
-if [ "$LOCAL" != "$UPSTREAM" ]; then
-  BEHIND=$(git rev-list HEAD..upstream/main --count)
-  echo "⚠️  Behind upstream by $BEHIND commits"
-  echo "Latest upstream: $(git log upstream/main -1 --oneline)"
-  echo ""
-  echo "Run: git merge upstream/main"
-else
-  echo "✅ Up to date with upstream"
-fi
-```
-
-### Conflict detection
-
-```bash
-#!/bin/bash
-# .patches/scripts/test-merge.sh
-
-cd ~/.continue/continue-src
-git fetch upstream
-
-# Test merge without committing
-git merge --no-commit --no-ff upstream/main 2>&1 | head -20
-
-# Check for conflicts in our patched files
+# Kiểm tra conflict trong các file đã patch
 CONFLICTS=$(git diff --name-only --diff-filter=U 2>/dev/null)
-if echo "$CONFLICTS" | grep -q "OpenAI.ts\|openaiTypeConverters.ts"; then
+if echo "$CONFLICTS" | grep -qE "OpenAI\.ts|openaiTypeConverters\.ts|visionProxy\.ts|extension\.ts"; then
   echo "⚠️  CONFLICT in patched files — manual resolution needed"
   echo "$CONFLICTS"
+  git rebase --abort
 else
   echo "✅ No conflicts in patched files"
+  git rebase --abort
+fi
+```
+
+### Step 3: Rebase develop lên upstream/main
+
+```bash
+git checkout develop
+git rebase upstream/main
+
+# Nếu conflict:
+# 1. Resolve manually trong file conflict
+# 2. git add <file>
+# 3. git rebase --continue
+# Nếu muốn skip commit: git rebase --skip
+
+# Push develop (force-with-lease vì history thay đổi sau rebase)
+git push origin develop --force-with-lease
+```
+
+**Resolve conflict thường gặp:**
+
+```bash
+# extensions/vscode/package.json — version conflict
+# Luôn giữ version theo scheme: {upstream_major}.{upstream_minor}.{custom_patch}
+# Ví dụ: upstream v2.1.0 → custom version "2.1.1"
+```
+
+### Step 4: Verify patches còn hoạt động
+
+```bash
+# Patch 01 — NIM empty response retry
+grep -c "retry.*without.*tools\|tool_calls.*length.*0" \
+  packages/openai-adapters/src/apis/OpenAI.ts
+# Expected: >= 1
+
+# Patch 02 — JSON sanitize
+grep -c "sanitize\|JSON\.parse.*arguments" \
+  core/llm/openaiTypeConverters.ts
+# Expected: >= 1
+
+# Patch 03 — Vision proxy
+ls core/llm/visionProxy.ts
+# Expected: file exists
+
+# Patch 04 — TLS / insecure option
+grep -c "rejectUnauthorized\|NODE_TLS_REJECT" \
+  packages/fetch/src/getAgentOptions.ts
+# Expected: >= 1
+
+# Build test
+conda run -n node20 bash -c 'cd packages/openai-adapters && npm run build 2>&1 | tail -3'
+conda run -n node20 bash -c 'cd core && npm run build 2>&1 | tail -3'
+```
+
+### Step 5: Merge vào release
+
+```bash
+git checkout release/v2.1.x-onprem
+git merge develop
+git push origin release/v2.1.x-onprem
+
+# Tag nếu là release chính thức
+git tag v2.1.1
+git push origin v2.1.1
+```
+
+### Step 6: Build VSIX
+
+```bash
+# Trên WSL (linux-x64) hoặc target platform
+conda run -n node20 bash -c '
+  cd packages/openai-adapters && npm run build && cd ../.. &&
+  cd core && npm run build && cd .. &&
+  cd gui && npm run build && cd .. &&
+  cd extensions/vscode && npm run prepackage -- --target linux-x64 &&
+  npm run package -- --target linux-x64
+'
+# Output: extensions/vscode/build/continue-linux-x64-2.1.1.vsix
+```
+
+---
+
+## 3. Khi upstream release version mới (vd: v2.2.0)
+
+```bash
+# 1. Fetch
+git fetch upstream refs/heads/main:refs/remotes/upstream/main
+
+# 2. Rebase develop
+git checkout develop
+git rebase upstream/main
+# Resolve version conflict → đặt "2.2.1" trong package.json
+
+# 3. Rename release branch (hoặc tạo mới)
+git checkout release/v2.1.x-onprem
+git branch -m release/v2.2.x-onprem
+git push origin release/v2.2.x-onprem
+git push origin --delete release/v2.1.x-onprem  # xóa branch cũ nếu muốn
+
+# 4. Merge develop → release mới
+git merge develop
+git push origin release/v2.2.x-onprem
+```
+
+---
+
+## 4. When Patches Become Unnecessary
+
+### Patch 01 — NIM Empty Response Retry (`packages/openai-adapters/src/apis/OpenAI.ts`)
+
+**Remove when:**
+- PR #13091 merged vào upstream → upstream tự xử lý
+- NIM/vLLM servers fix behavior (trả content thay vì null khi không call tool)
+
+```bash
+# Kiểm tra upstream đã có chưa
+grep -r "retry.*without.*tools" packages/openai-adapters/src/
+```
+
+### Patch 02 — JSON Sanitize (`core/llm/openaiTypeConverters.ts`)
+
+**Remove when:**
+- PR #13092 merged vào upstream
+- vLLM fix issue #43995 (không strict validate tool_calls arguments trong history)
+
+```bash
+grep -r "sanitize.*args\|JSON\.parse.*arguments" core/llm/
+```
+
+### Patch 03 — Vision Proxy (`core/llm/visionProxy.ts`)
+
+**Remove when:**
+- PR #13093 (context usage) merged — partially related
+- Upstream adds native vision proxy support
+
+### Patch 04 — TLS / Insecure (`packages/fetch/src/getAgentOptions.ts`, `extensions/vscode/src/extension.ts`)
+
+**Keep indefinitely** — đặc thù môi trường on-prem với self-signed certs.
+
+---
+
+## 5. Automated Sync Check
+
+```bash
+#!/bin/bash
+# Chạy hàng tuần để check upstream có commits mới không
+
+cd /mnt/e/08-Sources/1.AI/continue
+git fetch upstream refs/heads/main:refs/remotes/upstream/main 2>/dev/null
+
+BEHIND=$(git rev-list develop..upstream/main --count)
+
+if [ "$BEHIND" -gt 0 ]; then
+  echo "⚠️  develop is behind upstream/main by $BEHIND commits"
+  echo "Latest upstream:"
+  git log upstream/main -3 --oneline
+  echo ""
+  echo "Run: git checkout develop && git rebase upstream/main"
+else
+  echo "✅ develop is up to date with upstream/main"
 fi
 
-# Abort test merge
-git merge --abort
+# Check PR status
+echo ""
+echo "=== PR Status ==="
+gh pr list --repo continuedev/continue --author thanhnnict --state open \
+  --json number,title,state 2>/dev/null
 ```
 
 ---
 
-## 5. Multi-Platform Build
+## 6. Multi-Platform Build
 
-### Thực tế đã gặp: Docker build (Linux) → macOS = FAIL
+### Kết luận: Build phải chạy trên đúng target OS
 
-Trước đó đã thử build VSIX trong Docker container (Linux x86_64) trên server ViettelCloud rồi copy về macOS → **extension không chạy được** (UI stuck loading).
+Native modules (`onnxruntime-node`, `@lancedb/vectordb`, `@vscode/ripgrep`) được copy trực tiếp từ `node_modules` của host → không thể cross-compile.
 
-**Nguyên nhân đã xác định:**
+| Build host | Target | Result |
+|---|---|---|
+| macOS arm64 | `darwin-arm64` | ✅ |
+| Windows x64 | `win32-x64` | ✅ |
+| Linux x64 (WSL) | `linux-x64` | ✅ |
+| Linux x64 | `darwin-arm64` | ❌ — native modules sai platform |
 
-Native modules trong Continue được **compile hoặc copy từ host OS** tại build time:
+**Build command (WSL/Linux):**
 
-| Module              | Cách lấy binary                                   |               Platform-bound                |
-| ------------------- | ------------------------------------------------- | :-----------------------------------------: |
-| `onnxruntime-node`  | Copy từ `core/node_modules/onnxruntime-node/bin/` | ✅ Binary build lúc `npm install` trên host |
-| `better-sqlite3`    | Download prebuild theo target flag                |    ⚠️ Download đúng nếu `--target` đúng     |
-| `@lancedb/vectordb` | npm optional dep theo platform                    |   ✅ Install lúc `npm install` trên host    |
-| `@vscode/ripgrep`   | npm postinstall download theo platform            |   ✅ Download lúc `npm install` trên host   |
-
-**Vấn đề cốt lõi**: `onnxruntime-node` và `@lancedb/vectordb` được **copy trực tiếp** từ `node_modules` (đã install trên host) vào output package. Nếu host là Linux → binary là Linux ELF → macOS không load được → extension crash silently (UI stuck).
-
-Script `prepackage.js` flow:
-
+```bash
+conda run -n node20 bash -c '
+  cd packages/openai-adapters && npm run build && cd ../.. &&
+  cd core && npm run build && cd .. &&
+  cd gui && npm run build && cd .. &&
+  cd extensions/vscode &&
+  npm run prepackage -- --target linux-x64 &&
+  npm run package -- --target linux-x64
+'
 ```
-1. npm install (trên host) → install native modules cho HOST platform
-2. Copy onnxruntime binary từ core/node_modules/ → out/bin/     ← PLATFORM BOUND
-3. Download sqlite3 prebuild theo --target flag                  ← CÓ THỂ CROSS
-4. Copy lancedb từ node_modules/@lancedb/vectordb-{platform}/   ← PLATFORM BOUND
-5. Copy ripgrep binary                                           ← PLATFORM BOUND
-6. esbuild bundle JS code                                        ← PLATFORM INDEPENDENT
-```
-
-Steps 2, 4, 5 copy binary **từ host `node_modules`** — nên phải build **trên đúng target OS**.
-
-### Kết luận: Cross-platform build KHÔNG đáng tin cậy
-
-| Build host         | Target         | Result                                                                          |
-| ------------------ | -------------- | ------------------------------------------------------------------------------- |
-| macOS arm64        | `darwin-arm64` | ✅ Works                                                                        |
-| macOS arm64        | `win32-x64`    | ⚠️ sqlite3 OK (downloaded), nhưng onnxruntime/lancedb = macOS binary → **FAIL** |
-| Linux x64 (Docker) | `darwin-arm64` | ❌ FAIL — native modules are Linux                                              |
-| Windows x64        | `win32-x64`    | ✅ Works                                                                        |
-
-### Recommended: Build trên mỗi platform hoặc CI matrix
-
-**Option A: CI/CD Matrix (recommended cho 300+ users)**
-
-```yaml
-# GitHub Actions example
-jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - os: macos-14 # Apple Silicon runner
-            target: darwin-arm64
-          - os: macos-13 # Intel runner
-            target: darwin-x64
-          - os: windows-latest
-            target: win32-x64
-          - os: ubuntu-latest
-            target: linux-x64
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-      - run: npm install --ignore-scripts
-      - run: |
-          cd packages/config-types && npm install && npm run build && cd ../..
-          cd packages/llm-info && npm install && npm run build && cd ../..
-          cd packages/fetch && npm install && npm run build && cd ../..
-          cd packages/openai-adapters && npm install && npm run build && cd ../..
-          cd packages/config-yaml && npm install && npm run build && cd ../..
-          cd packages/terminal-security && npm install && npm run build && cd ../..
-      - run: cd core && npm install && cd ..
-      - run: cd gui && npm install && npm run build && cd ..
-      - run: |
-          cd extensions/vscode
-          npm install
-          npm run prepackage -- --target ${{ matrix.target }}
-          npm run package -- --target ${{ matrix.target }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: vsix-${{ matrix.target }}
-          path: extensions/vscode/build/*.vsix
-```
-
-**Option B: Máy vật lý/VM per platform**
-
-- macOS (MacBook hiện tại) → build `darwin-arm64`
-- Windows VM/machine → build `win32-x64`
-- Linux server → build `linux-x64`
-
-**Option C: Hybrid — JS từ anywhere, native modules per-platform**
-
-1. Build JS bundle + GUI trên bất kỳ máy nào
-2. Trên mỗi target platform: `npm install` → lấy correct native modules
-3. Copy native modules vào package
-4. `vsce package`
-
-Phức tạp hơn nhưng giảm build time nếu JS changes nhiều hơn native changes.
 
 ---
 
-## 6. Versioning
+## 7. Versioning
 
-### Custom version scheme
+### Scheme: `{upstream_major}.{upstream_minor}.{custom_patch}`
 
-Dùng semver PATCH field làm custom build number:
+| Version | Nghĩa |
+|---------|-------|
+| `2.1.0` | Rebased lên upstream v2.1.0 (chưa custom patch) |
+| `2.1.1` | Custom build #1 sau rebase — hiện tại (develop HEAD) |
+| `2.1.2` | Custom build #2 — feature tiếp theo |
+| `2.2.1` | Sau khi sync upstream v2.2.0 |
 
-```
-{upstream_major}.{upstream_minor}.{custom_build_number}
-```
+**Quy tắc:**
+1. Mỗi lần build có thay đổi code → tăng PATCH +1
+2. Sync upstream major/minor mới → reset PATCH về 1 (vd `2.2.1`)
+3. Tag git mỗi release chính thức: `git tag v2.1.1`
 
-| Version | Nghĩa                                      |
-| ------- | ------------------------------------------ |
-| `2.0.0` | Upstream v2.0.0 nguyên bản (chưa custom)   |
-| `2.0.1` | Custom build #1 — patch NIM empty response |
-| `2.0.2` | Custom build #2 — patch JSON sanitize      |
-| `2.0.4` | Custom build #4 — vision proxy + cache     |
-| `2.1.0` | Rebased lên upstream v2.1.0 (reset)        |
-| `2.1.1` | Custom build #1 sau rebase                 |
-
-### Quy tắc
-
-1. **Mỗi lần rebuild có thay đổi code** → tăng PATCH +1
-2. **Sync upstream mới** (vd `v2.1.0`) → reset về `2.1.0`, custom builds tiếp từ `2.1.1`
-3. **Git tag** mỗi release: `git tag v2.0.4`
-4. **VSIX filename** tự động: `continue-darwin-arm64-2.0.4.vsix`
-
-### package.json fields
+**`extensions/vscode/package.json`:**
 
 ```json
 {
-  "version": "2.0.4",
-  "displayName": "Continue OnPrem — AI code agent",
-  "description": "Custom build with Vision Proxy, NIM/vLLM fixes, 524K context (based on upstream v2.0.0)"
+  "version": "2.1.1",
+  "displayName": "Continue OnPrem",
+  "description": "Custom build: Vision Proxy, NIM/vLLM fixes, TLS self-signed, context usage (based on upstream v2.1.0)"
 }
 ```
 
-- `version`: Semver hiển thị trong VS Code Extensions panel
-- `displayName`: Có "OnPrem" để phân biệt với marketplace version
-- `description`: Ghi rõ đây là custom build + features chính
+---
 
-### Ưu điểm so với scheme cũ
+## 8. Decision Matrix: When to Sync
 
-| Cũ (`customVersion` metadata)          | Mới (semver PATCH)               |
-| -------------------------------------- | -------------------------------- |
-| VS Code hiện "2.0.0" — không phân biệt | VS Code hiện "2.0.4" — rõ ràng   |
-| Cần mở package.json mới thấy           | Thấy ngay trong Extensions panel |
-| `code --install` không biết upgrade    | `code --install` nhận biết newer |
-| VSIX filename giống nhau               | VSIX filename unique per build   |
+| Upstream Change | Action | Priority |
+|---|---|---|
+| Security fix | Sync ngay | 🔴 High |
+| Bug fix trong patched files | Sync sớm, test kỹ | 🔴 High |
+| Bug fix core LLM logic | Sync sớm | 🟡 Medium |
+| New model support | Sync khi cần | 🟢 Low |
+| UI/UX changes | Sync thuận tiện | 🟢 Low |
+| Breaking refactor patched files | Plan migration | 🔴 High |
 
 ---
 
-## 7. Decision Matrix: When to Sync
+## 9. Contribution Back to Upstream
 
-| Upstream Change                    | Action                          | Priority  |
-| ---------------------------------- | ------------------------------- | --------- |
-| Security fix                       | Sync immediately                | 🔴 High   |
-| Bug fix in core LLM logic          | Sync soon, test patches         | 🟡 Medium |
-| New feature (model support)        | Sync when needed                | 🟢 Low    |
-| UI/UX changes                      | Sync at convenience             | 🟢 Low    |
-| Breaking refactor in patched files | Plan migration, test thoroughly | 🔴 High   |
+PR đã tạo (2026-08-09):
 
----
+| PR | Branch | File | Status |
+|----|--------|------|--------|
+| [#13091](https://github.com/continuedev/continue/pull/13091) | `fix/empty-response-retry` | `OpenAI.ts` | OPEN |
+| [#13092](https://github.com/continuedev/continue/pull/13092) | `fix/sanitize-tool-arguments` | `openaiTypeConverters.ts` | OPEN |
+| [#13093](https://github.com/continuedev/continue/pull/13093) | `feat/always-on-context-usage` | GUI components | OPEN |
 
-## 8. Contribution Back to Upstream
-
-Cả 2 patches đều có thể benefit community. Để submit PR:
-
-### PR #1: Empty Response Retry
-
-- Title: `fix(openai-adapters): retry without tools when server returns empty response`
-- Target: `continuedev/continue` main branch
-- Description: NIM/vLLM compatibility fix
-- Tests: Add unit test in `packages/openai-adapters/src/test/`
-
-### PR #2: JSON Sanitize
-
-- Title: `fix(core): sanitize malformed tool arguments in conversation history`
-- Target: `continuedev/continue` main branch
-- Description: Prevents 400 errors when LLM generates invalid JSON arguments
-- Reference: vLLM issue #43995
-
-### Process
+**Tạo PR mới:**
 
 ```bash
-# 1. Fork continuedev/continue on GitHub
-# 2. Create branch per fix
-git checkout -b fix/empty-response-retry
-# 3. Cherry-pick patch commit
-# 4. Push and create PR via GitHub UI or gh CLI
-gh pr create --title "fix(openai-adapters): retry without tools on empty response" \
-  --body "..." --base main
+# Luôn tạo branch từ upstream/main — KHÔNG từ develop
+git fetch upstream refs/heads/main:refs/remotes/upstream/main
+git checkout -b fix/ten-van-de upstream/main
+
+# Code, commit, push
+git push -u origin fix/ten-van-de
+
+# Tạo PR
+gh pr create \
+  --repo continuedev/continue \
+  --title "fix: mô tả ngắn" \
+  --body "..." \
+  --base main
 ```
+
+Xem chi tiết: `.patches/07-huong-dan-dong-gop-pr-cong-dong.md`

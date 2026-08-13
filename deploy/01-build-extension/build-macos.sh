@@ -140,6 +140,43 @@ fi
 BRANCH=$(git branch --show-current)
 info "Branch: $BRANCH"
 
+# --- Verify critical dependencies ---
+info "Checking critical build dependencies..."
+MISSING=0
+
+# ripgrep binary
+if [[ ! -f "$REPO_ROOT/extensions/vscode/node_modules/@vscode/ripgrep/bin/rg" ]]; then
+  warn "Missing: @vscode/ripgrep binary"
+  MISSING=$((MISSING+1))
+fi
+
+# onnxruntime
+if [[ ! -f "$REPO_ROOT/core/node_modules/onnxruntime-node/bin/napi-v3/darwin/${ARCH}/onnxruntime_binding.node" ]]; then
+  warn "Missing: onnxruntime binding (darwin/${ARCH})"
+  MISSING=$((MISSING+1))
+fi
+
+# lancedb
+if [[ ! -f "$REPO_ROOT/extensions/vscode/node_modules/@lancedb/vectordb-${TARGET}/index.node" ]]; then
+  warn "Missing: @lancedb/vectordb-${TARGET}"
+  MISSING=$((MISSING+1))
+fi
+
+# node_modules existence
+if [[ ! -d "$REPO_ROOT/extensions/vscode/node_modules" ]]; then
+  warn "Missing: extensions/vscode/node_modules/"
+  MISSING=$((MISSING+1))
+fi
+
+if [[ $MISSING -gt 0 ]]; then
+  error "Missing $MISSING critical dependencies. Run:\n" \
+        "  bash deploy/01-build-extension/00-pre-install.sh --target $TARGET\n" \
+        "Or manually:\n" \
+        "  cd extensions/vscode && npm install\n" \
+        "  cd core && npm install"
+fi
+success "All critical dependencies present"
+
 # --- Helper: run npm with correct environment ---
 run_npm() {
   local dir="$1"
@@ -173,18 +210,41 @@ if [[ "$ONLY_EXT" == "false" ]]; then
 fi
 
 # --- Build extension ---
-timer "Packaging extension (target: $TARGET)..."
+# NOTE: We avoid `npm run prepackage` and `npm run package` because:
+#   1. npmInstall() in prepackage.js hangs when node_modules already exist
+#      (child processes fork `npm install` which blocks indefinitely on macOS)
+#   2. npm lifecycle auto-runs "prepackage" before "package" (naming convention)
+#      causing a double-hang
+#   3. package.js calls vsce directly without triggering vscode:prepublish
+#      (esbuild step), resulting in missing out/extension.js
+#
+# Instead, we call scripts directly with SKIP_INSTALLS=true and use npx vsce
+# which properly triggers vscode:prepublish → esbuild → package.
+
+timer "Prepackage (target: $TARGET)..."
 if [[ "$USE_CONDA" == "true" ]]; then
   bash -c "
     cd '$REPO_ROOT/extensions/vscode' &&
-    $NPM_CMD run prepackage -- --target $TARGET 2>&1 | tail -5 &&
-    $NPM_CMD run package -- --target $TARGET 2>&1 | tail -5
+    SKIP_INSTALLS=true $NODE_CMD scripts/prepackage.js --target $TARGET 2>&1 | tail -10
   "
 else
   bash -c "
     cd '$REPO_ROOT/extensions/vscode' &&
-    npm run prepackage -- --target $TARGET 2>&1 | tail -5 &&
-    npm run package -- --target $TARGET 2>&1 | tail -5
+    SKIP_INSTALLS=true node scripts/prepackage.js --target $TARGET 2>&1 | tail -10
+  "
+fi
+success "Prepackage done"
+
+timer "Packaging VSIX (target: $TARGET)..."
+if [[ "$USE_CONDA" == "true" ]]; then
+  bash -c "
+    cd '$REPO_ROOT/extensions/vscode' &&
+    $NPM_CMD exec -- @vscode/vsce package --out ./build --no-dependencies --target $TARGET 2>&1 | tail -10
+  "
+else
+  bash -c "
+    cd '$REPO_ROOT/extensions/vscode' &&
+    npx @vscode/vsce package --out ./build --no-dependencies --target $TARGET 2>&1 | tail -10
   "
 fi
 

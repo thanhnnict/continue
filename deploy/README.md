@@ -8,8 +8,15 @@
 
 ```
 deploy/
-├── 01-build-extension/          Build VSIX từ source (Linux/WSL, Windows, macOS)
-├── 02-vscode-portable-windows/  VSCode portable air-gap cho Windows
+├── 01-build-extension/           Build VSIX từ source (Linux/WSL, Windows, macOS)
+│   ├── 00-pre-install.sh         Pre-install native deps (bash, registry fallback)
+│   ├── 00-pre-install.ps1        Pre-install native deps (PowerShell, registry fallback)
+│   ├── build-linux.sh            Build trên Linux/WSL (conda node20)
+│   ├── build-macos.sh            Build trên macOS (conda hoặc system node)
+│   ├── build-windows.ps1         Build trên Windows (PowerShell)
+│   ├── README.md                 Hướng dẫn chi tiết
+│   └── troubleshooting.md        Xử lý lỗi thường gặp
+├── 02-vscode-portable-windows/   VSCode portable air-gap cho Windows
 └── 03-vscode-portable-linux-wsl/ VSCode portable air-gap cho Linux/WSL (WSLg)
 ```
 
@@ -19,33 +26,120 @@ deploy/
 
 ```mermaid
 flowchart TD
-    A[01-build-extension\nbuild VSIX] --> B[02-vscode-portable-windows\nWindows deploy]
-    A --> C[03-vscode-portable-linux-wsl\nWSL deploy - WSLg]
-    B --> D[VSCode Windows\nwith Continue]
-    C --> E[VSCode Linux WSL\ncode-wsl command]
+    subgraph "01-build-extension"
+        PRE[00-pre-install\nnative deps + registry fallback]
+        BUILD[build script\npackages → core → gui → VSIX]
+        PRE --> BUILD
+    end
+
+    BUILD --> W[02-vscode-portable-windows\nWindows air-gap deploy]
+    BUILD --> L[03-vscode-portable-linux-wsl\nWSL deploy - WSLg]
+    W --> WR[VSCode Windows\nwith Continue]
+    L --> LR[VSCode Linux WSL\ncode-wsl command]
 ```
 
 ---
 
-## Quickstart theo use case
+## Build pipeline (tất cả platforms)
 
-### Build VSIX
+```mermaid
+flowchart LR
+    subgraph "Packages (~5s)"
+        P1[config-types] --> P2[llm-info]
+        P1 --> P3[fetch]
+        P2 --> P4[openai-adapters]
+        P3 --> P4
+        P4 --> P5[config-yaml]
+        P4 --> P6[terminal-security]
+    end
 
-```bash
-# Linux/WSL → linux-x64
-bash deploy/01-build-extension/build-linux.sh --target linux-x64
+    subgraph "Core + GUI (~15s)"
+        P5 --> CORE[core]
+        P6 --> CORE
+        CORE --> GUI[gui - vite build]
+    end
 
-# Linux/WSL → win32-x64 (nếu node_modules/ripgrep đã có rg.exe)
-bash deploy/01-build-extension/build-linux.sh --target win32-x64
+    subgraph "Extension (~15s)"
+        GUI --> PRE[prepackage\ncopy binaries + assets]
+        PRE --> VSCE[vsce package\nesbuild + VSIX]
+    end
 
-# Windows → win32-x64
-.\deploy\01-build-extension\build-windows.ps1
-
-# macOS → darwin-arm64
-bash deploy/01-build-extension/build-macos.sh
+    VSCE --> OUT[continue-target-2.1.1.vsix\n~70-80 MB]
 ```
 
-### Setup VSCode portable Windows (air-gap)
+---
+
+## Quickstart theo platform
+
+### macOS (Apple Silicon / Intel)
+
+```bash
+# Pre-install (lần đầu hoặc sau git pull thay đổi deps)
+bash deploy/01-build-extension/00-pre-install.sh --target darwin-arm64
+
+# Full build (~43s)
+bash deploy/01-build-extension/build-macos.sh
+
+# Quick rebuild khi chỉ sửa extension/GUI code (~12s)
+bash deploy/01-build-extension/build-macos.sh --only-ext
+
+# Output: extensions/vscode/build/continue-darwin-arm64-2.1.1.vsix
+```
+
+### Linux / WSL
+
+```bash
+# Pre-install (fix platform binaries, auto-detect Nexus/public registry)
+bash deploy/01-build-extension/00-pre-install.sh --target linux-x64
+
+# Full build
+bash deploy/01-build-extension/build-linux.sh --target linux-x64
+
+# Quick rebuild
+bash deploy/01-build-extension/build-linux.sh --target linux-x64 --only-ext
+
+# Cross-compile win32-x64 (cần rg.exe từ Windows npm install trước đó)
+bash deploy/01-build-extension/build-linux.sh --target win32-x64
+```
+
+### Windows (PowerShell)
+
+```powershell
+# Pre-install (auto-detect Nexus/public registry)
+.\deploy\01-build-extension\00-pre-install.ps1
+
+# Full build
+.\deploy\01-build-extension\build-windows.ps1
+
+# Quick rebuild
+.\deploy\01-build-extension\build-windows.ps1 -OnlyExt
+```
+
+---
+
+## npm Registry — Auto Fallback
+
+Build scripts và pre-install tự động detect npm registry:
+
+```mermaid
+flowchart TD
+    A{--registry arg<br/>hoặc NPM_REGISTRY env?} -->|Có| B[Dùng registry chỉ định]
+    A -->|Không| C{Nexus localhost:7081<br/>accessible?}
+    C -->|Có| D[Dùng Nexus internal]
+    C -->|Không - timeout 3s| E[Dùng public npmjs.org]
+    D -->|Install fail| E
+```
+
+| Env                  | Nexus | Registry sử dụng                              |
+| -------------------- | :---: | --------------------------------------------- |
+| Linux/WSL (có Nexus) |  ✅   | `http://localhost:7081/repository/npm-group/` |
+| macOS local dev      |  ❌   | `https://registry.npmjs.org/` (auto fallback) |
+| Windows (có Nexus)   |  ✅   | `http://localhost:7081/repository/npm-group/` |
+| CI/CD                |   —   | Override qua `--registry` hoặc env var        |
+
+---
+
+## Setup VSCode portable Windows (air-gap)
 
 ```powershell
 cd deploy\02-vscode-portable-windows
@@ -55,7 +149,7 @@ cd deploy\02-vscode-portable-windows
 .\verify.ps1
 ```
 
-### Setup VSCode portable Linux/WSL (WSLg, fix tool call terminal)
+## Setup VSCode portable Linux/WSL (WSLg)
 
 ```bash
 bash deploy/03-vscode-portable-linux-wsl/01-setup-vscode-portable.sh
@@ -67,13 +161,23 @@ source ~/.bashrc && code-wsl .
 
 ---
 
+## Build time tham chiếu
+
+| Platform      | Full build | --skip-packages | --only-ext |
+| ------------- | :--------: | :-------------: | :--------: |
+| macOS arm64   |    ~50s    |      ~42s       |  ~12-14s   |
+| Linux/WSL x64 |  ~60-90s   |      ~50s       |  ~15-20s   |
+| Windows x64   |  ~60-90s   |      ~50s       |  ~15-20s   |
+
+---
+
 ## VSCode version
 
-| Property | Value |
-|----------|-------|
-| Version | `1.132.0` |
-| Commit | `df53daabb1` |
-| Date | `2026-08-04` |
+| Property         | Value                                    |
+| ---------------- | ---------------------------------------- |
+| Version          | `1.132.0`                                |
+| Commit           | `df53daabb1`                             |
+| Date             | `2026-08-04`                             |
 | Custom extension | `2.1.1` (branch `release/v2.1.x-onprem`) |
 
 ---
@@ -83,3 +187,4 @@ source ~/.bashrc && code-wsl .
 - Binaries (`*.tar.gz`, `*.zip`, `*.vsix`) được gitignore — không commit lên repo
 - VSIX build output tại: `extensions/vscode/build/continue-{target}-{version}.vsix`
 - Patches documentation: xem `.patches/README.md`
+- Troubleshooting: xem `deploy/01-build-extension/troubleshooting.md`

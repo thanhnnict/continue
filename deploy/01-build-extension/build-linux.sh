@@ -72,6 +72,40 @@ if [[ "$BRANCH" != "develop" && "$BRANCH" != release/* ]]; then
   warn "Not on develop/release branch. Continuing anyway..."
 fi
 
+# --- Verify critical dependencies ---
+info "Checking critical build dependencies..."
+MISSING=0
+
+EXE=""
+if [[ "$TARGET" == "win32-x64" ]]; then EXE=".exe"; fi
+
+# node_modules
+if [[ ! -d "$REPO_ROOT/extensions/vscode/node_modules" ]]; then
+  warn "Missing: extensions/vscode/node_modules/"
+  MISSING=$((MISSING+1))
+fi
+
+# ripgrep
+if [[ ! -f "$REPO_ROOT/extensions/vscode/node_modules/@vscode/ripgrep/bin/rg${EXE}" ]]; then
+  warn "Missing: @vscode/ripgrep binary (rg${EXE})"
+  MISSING=$((MISSING+1))
+fi
+
+# lancedb
+LANCEDB_SUFFIX=""
+if [[ "$TARGET" == linux-* ]]; then LANCEDB_SUFFIX="-gnu"; fi
+if [[ "$TARGET" == win32-* ]]; then LANCEDB_SUFFIX="-msvc"; fi
+if [[ ! -f "$REPO_ROOT/extensions/vscode/node_modules/@lancedb/vectordb-${TARGET}${LANCEDB_SUFFIX}/index.node" ]]; then
+  warn "Missing: @lancedb/vectordb-${TARGET}${LANCEDB_SUFFIX}"
+  MISSING=$((MISSING+1))
+fi
+
+if [[ $MISSING -gt 0 ]]; then
+  error "Missing $MISSING critical dependencies. Run:\n" \
+        "  bash deploy/01-build-extension/00-pre-install.sh --target $TARGET"
+fi
+success "All critical dependencies present"
+
 # --- Build packages (unless skipped) ---
 if [[ "$SKIP_PACKAGES" == "false" ]]; then
   timer "Building packages..."
@@ -95,11 +129,25 @@ if [[ "$ONLY_EXT" == "false" ]]; then
 fi
 
 # --- Build VSCode extension ---
-timer "Packaging extension (target: $TARGET)..."
+# NOTE: We avoid `npm run prepackage` and `npm run package` because:
+#   1. npmInstall() in prepackage.js forks child processes that run `npm install`
+#      which can hang indefinitely when node_modules already exist
+#   2. npm lifecycle auto-runs "prepackage" before "package" (naming convention)
+#   3. package.js calls vsce directly without vscode:prepublish → missing esbuild
+#
+# Instead: SKIP_INSTALLS=true + npx @vscode/vsce (triggers vscode:prepublish)
+
+timer "Prepackage (target: $TARGET)..."
 conda run -n node20 bash -c "
   cd extensions/vscode &&
-  npm run prepackage -- --target $TARGET 2>&1 | tail -5 &&
-  npm run package -- --target $TARGET 2>&1 | tail -5
+  SKIP_INSTALLS=true node scripts/prepackage.js --target $TARGET 2>&1 | tail -10
+"
+success "Prepackage done"
+
+timer "Packaging VSIX (target: $TARGET)..."
+conda run -n node20 bash -c "
+  cd extensions/vscode &&
+  npx @vscode/vsce package --out ./build --no-dependencies --target $TARGET 2>&1 | tail -10
 "
 
 # --- Result ---

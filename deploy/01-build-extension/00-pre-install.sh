@@ -1,34 +1,42 @@
 #!/usr/bin/env bash
 # =============================================================================
-# 00-pre-install.sh — Pre-install native dependencies cho build Linux/WSL
+# 00-pre-install.sh — Pre-install native dependencies cho build
 #
 # Vấn đề: node_modules trong repo thường được install trên Windows (rg.exe),
 # nhưng build linux-x64 cần Linux binaries (rg, .so files).
 # Script này fix tất cả platform-specific dependencies trước khi build.
 #
 # Những gì script làm:
-#   1. Kiểm tra / cài conda env node20
-#   2. npm install trong extensions/vscode (lấy đúng platform packages)
-#   3. Fix @vscode/ripgrep → install linux-x64 binary + symlink
-#   4. Fix @lancedb → install linux-x64-gnu binary
-#   5. Verify tất cả required files có mặt
+#   1. Kiểm tra / cài conda env node20 (hoặc dùng system Node.js)
+#   2. Auto-detect npm registry (Nexus internal → fallback public npmjs.org)
+#   3. npm install trong extensions/vscode (lấy đúng platform packages)
+#   4. Fix @vscode/ripgrep → install platform binary + symlink
+#   5. Fix @lancedb → install platform binary
+#   6. Verify tất cả required files có mặt
+#
+# Registry fallback:
+#   - Thử Nexus internal (http://localhost:7081/repository/npm-group/) trước
+#   - Nếu không accessible → tự động fallback sang https://registry.npmjs.org/
+#   - Override bằng env var: NPM_REGISTRY="https://..." hoặc --registry <url>
 #
 # Usage:
-#   bash deploy/01-build-extension/00-pre-install.sh [--target linux-x64|win32-x64]
+#   bash deploy/01-build-extension/00-pre-install.sh [--target linux-x64|win32-x64|darwin-arm64|darwin-x64]
 #   bash deploy/01-build-extension/00-pre-install.sh --check-only
+#   bash deploy/01-build-extension/00-pre-install.sh --registry https://registry.npmjs.org/
 # =============================================================================
 set -euo pipefail
 
 TARGET="${TARGET:-linux-x64}"
 CHECK_ONLY=false
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-NPM_REGISTRY="http://localhost:7081/repository/npm-group/"
+USER_REGISTRY=""
 
 # --- Parse args ---
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --target)     TARGET="$2"; shift 2 ;;
     --check-only) CHECK_ONLY=true; shift ;;
+    --registry)   USER_REGISTRY="$2"; shift 2 ;;
     *) shift ;;
   esac
 done
@@ -39,6 +47,39 @@ info()    { echo -e "${BLUE}[INFO]${NC}  $*"; }
 success() { echo -e "${GREEN}[OK]${NC}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()   { echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+
+# =============================================================================
+# Registry detection with fallback
+# =============================================================================
+NEXUS_REGISTRY="http://localhost:7081/repository/npm-group/"
+PUBLIC_REGISTRY="https://registry.npmjs.org/"
+
+detect_npm_registry() {
+  # Priority: --registry arg > NPM_REGISTRY env var > auto-detect
+  if [[ -n "$USER_REGISTRY" ]]; then
+    NPM_REGISTRY="$USER_REGISTRY"
+    info "Using registry from --registry arg: $NPM_REGISTRY"
+    return
+  fi
+
+  if [[ -n "${NPM_REGISTRY:-}" ]]; then
+    info "Using registry from NPM_REGISTRY env: $NPM_REGISTRY"
+    return
+  fi
+
+  # Auto-detect: try Nexus first, fallback to public
+  info "Auto-detecting npm registry..."
+  if curl -sf --connect-timeout 3 --max-time 5 "${NEXUS_REGISTRY}-/ping" >/dev/null 2>&1 ||
+     curl -sf --connect-timeout 3 --max-time 5 "${NEXUS_REGISTRY}" >/dev/null 2>&1; then
+    NPM_REGISTRY="$NEXUS_REGISTRY"
+    success "Nexus internal registry available: $NPM_REGISTRY"
+  else
+    NPM_REGISTRY="$PUBLIC_REGISTRY"
+    warn "Nexus not available — falling back to public registry: $NPM_REGISTRY"
+  fi
+}
+
+detect_npm_registry
 
 # Derive platform info from target
 case "$TARGET" in
@@ -64,20 +105,46 @@ EXT_DIR="${REPO_ROOT}/extensions/vscode"
 FAILED=0
 
 # =============================================================================
-# STEP 0: Verify conda env node20
+# STEP 0: Verify Node.js environment (conda node20 OR system Node 20.x)
 # =============================================================================
-info "Checking conda env 'node20'..."
-if ! conda env list 2>/dev/null | grep -q "^node20"; then
+info "Checking Node.js environment..."
+
+USE_CONDA=false
+NODE_PREFIX=""
+
+if command -v conda &>/dev/null && conda env list 2>/dev/null | grep -q "^node20"; then
+  USE_CONDA=true
+  NODE_PREFIX="conda run -n node20"
+  NODE_VER=$($NODE_PREFIX node --version 2>/dev/null || echo "N/A")
+  success "Using conda env 'node20': $NODE_VER"
+elif command -v node &>/dev/null; then
+  NODE_VER=$(node --version 2>/dev/null || echo "N/A")
+  NODE_MAJOR=$(echo "$NODE_VER" | grep -oE '[0-9]+' | head -1)
+  if [[ "$NODE_MAJOR" != "20" ]]; then
+    warn "System Node.js is $NODE_VER — expected v20.x"
+    warn "Consider: conda create -n node20 -y nodejs=20"
+  fi
+  success "Using system Node.js: $NODE_VER"
+else
   if [[ "$CHECK_ONLY" == "true" ]]; then
-    echo -e "  ${RED}[FAIL]${NC} conda env 'node20' not found"
+    echo -e "  ${RED}[FAIL]${NC} Node.js not found (no conda node20, no system node)"
     FAILED=$((FAILED+1))
   else
-    info "Creating conda env 'node20'..."
-    conda create -n node20 -y nodejs=20
+    error "Node.js not found. Install via:\n" \
+          "  conda create -n node20 -y nodejs=20   (recommended)\n" \
+          "  nvm install 20 && nvm use 20\n" \
+          "  brew install node@20                  (macOS)"
   fi
 fi
-NODE_VER=$(conda run -n node20 node --version 2>/dev/null || echo "N/A")
-success "Node: $NODE_VER"
+
+# Helper: run npm command with correct environment
+run_npm_cmd() {
+  if [[ "$USE_CONDA" == "true" ]]; then
+    conda run -n node20 "$@"
+  else
+    "$@"
+  fi
+}
 
 # =============================================================================
 # Helper: check_or_install
@@ -100,11 +167,23 @@ check_file() {
 # STEP 1: npm install trong extensions/vscode
 # =============================================================================
 if [[ "$CHECK_ONLY" == "false" ]]; then
-  info "Running npm install in extensions/vscode..."
-  conda run -n node20 bash -c "
+  info "Running npm install in extensions/vscode (registry: $NPM_REGISTRY)..."
+  run_npm_cmd bash -c "
     cd '${EXT_DIR}'
-    npm install --registry ${NPM_REGISTRY} 2>&1 | tail -4
-  "
+    npm install --registry '${NPM_REGISTRY}' 2>&1 | tail -4
+  " || {
+    # Fallback: if Nexus failed mid-install, retry with public registry
+    if [[ "$NPM_REGISTRY" != "$PUBLIC_REGISTRY" ]]; then
+      warn "npm install failed with $NPM_REGISTRY — retrying with public registry..."
+      NPM_REGISTRY="$PUBLIC_REGISTRY"
+      run_npm_cmd bash -c "
+        cd '${EXT_DIR}'
+        npm install --registry '${NPM_REGISTRY}' 2>&1 | tail -4
+      "
+    else
+      error "npm install failed"
+    fi
+  }
   success "npm install done"
 fi
 
@@ -123,10 +202,20 @@ if [[ ! -f "$RIPGREP_BIN" ]]; then
     FAILED=$((FAILED+1))
   else
     info "Installing $RIPGREP_PKG..."
-    conda run -n node20 bash -c "
+    run_npm_cmd bash -c "
       cd '${EXT_DIR}'
-      npm install '${RIPGREP_PKG}' --registry ${NPM_REGISTRY} --no-save 2>&1 | tail -3
-    "
+      npm install '${RIPGREP_PKG}' --registry '${NPM_REGISTRY}' --no-save 2>&1 | tail -3
+    " || {
+      if [[ "$NPM_REGISTRY" != "$PUBLIC_REGISTRY" ]]; then
+        warn "Failed with $NPM_REGISTRY — retrying with public registry..."
+        run_npm_cmd bash -c "
+          cd '${EXT_DIR}'
+          npm install '${RIPGREP_PKG}' --registry '${PUBLIC_REGISTRY}' --no-save 2>&1 | tail -3
+        "
+      else
+        error "Failed to install $RIPGREP_PKG"
+      fi
+    }
     success "$RIPGREP_PKG installed"
   fi
 else
@@ -162,10 +251,20 @@ if [[ ! -f "$LANCEDB_NODE" ]]; then
     FAILED=$((FAILED+1))
   else
     info "Installing $LANCEDB_PKG..."
-    conda run -n node20 bash -c "
+    run_npm_cmd bash -c "
       cd '${EXT_DIR}'
-      npm install '${LANCEDB_PKG}' --registry ${NPM_REGISTRY} --no-save 2>&1 | tail -3
-    "
+      npm install '${LANCEDB_PKG}' --registry '${NPM_REGISTRY}' --no-save 2>&1 | tail -3
+    " || {
+      if [[ "$NPM_REGISTRY" != "$PUBLIC_REGISTRY" ]]; then
+        warn "Failed with $NPM_REGISTRY — retrying with public registry..."
+        run_npm_cmd bash -c "
+          cd '${EXT_DIR}'
+          npm install '${LANCEDB_PKG}' --registry '${PUBLIC_REGISTRY}' --no-save 2>&1 | tail -3
+        "
+      else
+        error "Failed to install $LANCEDB_PKG"
+      fi
+    }
     success "$LANCEDB_PKG installed"
   fi
 else

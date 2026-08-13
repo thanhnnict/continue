@@ -1,4 +1,4 @@
-const { exec } = require("child_process");
+const { spawn } = require("child_process");
 const fs = require("fs");
 
 const pkg = JSON.parse(
@@ -27,17 +27,22 @@ if (!fs.existsSync("build")) {
 
 const isPreRelease = args.includes("--pre-release");
 
+const vscePath = require.resolve("@vscode/vsce/out/main");
 let command = isPreRelease
-  ? "npx @vscode/vsce package --out ./build --pre-release --no-dependencies" // --yarn"
-  : "npx @vscode/vsce package --out ./build --no-dependencies"; // --yarn";
+  ? `node "${vscePath}" package --out ./build --pre-release --no-dependencies`
+  : `node "${vscePath}" package --out ./build --no-dependencies`;
 
 if (target) {
   command += ` --target ${target}`;
 }
 
-exec(command, (error) => {
-  if (error) {
-    throw error;
+const parts = command.split(" ");
+const childCmd = parts[0];
+const childArgs = parts.slice(1);
+const child = spawn(childCmd, childArgs, { stdio: "inherit", shell: true });
+child.on("exit", (code) => {
+  if (code !== 0) {
+    process.exit(code);
   }
   console.log(
     `vsce package completed - extension created at extensions/vscode/build/continue-${version}.vsix`,

@@ -57,6 +57,30 @@ Write-Ok "Node: $NodeVer | npm: $NpmVer"
 $Branch = git branch --show-current 2>&1
 Write-Info "Branch: $Branch"
 
+# --- Verify critical dependencies ---
+Write-Info "Checking critical build dependencies..."
+$Missing = 0
+
+if (-not (Test-Path "extensions\vscode\node_modules")) {
+  Write-Warn "Missing: extensions\vscode\node_modules\"
+  $Missing++
+}
+
+if (-not (Test-Path "extensions\vscode\node_modules\@vscode\ripgrep\bin\rg.exe")) {
+  Write-Warn "Missing: @vscode\ripgrep binary (rg.exe)"
+  $Missing++
+}
+
+if (-not (Test-Path "extensions\vscode\node_modules\@lancedb\vectordb-win32-x64-msvc\index.node")) {
+  Write-Warn "Missing: @lancedb\vectordb-win32-x64-msvc"
+  $Missing++
+}
+
+if ($Missing -gt 0) {
+  Write-Err "Missing $Missing critical dependencies. Run:`n  .\deploy\01-build-extension\00-pre-install.ps1 -Target $Target"
+}
+Write-Ok "All critical dependencies present"
+
 # --- Build packages ---
 if (-not $SkipPackages -and -not $OnlyExt) {
   Write-Timer "Building packages..."
@@ -82,10 +106,23 @@ if (-not $OnlyExt) {
 }
 
 # --- Build extension ---
-Write-Timer "Packaging extension (target: $Target)..."
+# NOTE: We avoid `npm run prepackage` and `npm run package` because:
+#   1. npmInstall() in prepackage.js forks child processes that run `npm install`
+#      which can hang indefinitely when node_modules already exist
+#   2. npm lifecycle auto-runs "prepackage" before "package" (naming convention)
+#   3. package.js calls vsce directly without vscode:prepublish → missing esbuild
+#
+# Instead: SKIP_INSTALLS=true + npx @vscode/vsce (triggers vscode:prepublish)
+
+Write-Timer "Prepackage (target: $Target)..."
 Push-Location "extensions\vscode"
-npm run prepackage -- --target $Target 2>&1 | Select-Object -Last 5 | Write-Host
-npm run package -- --target $Target 2>&1 | Select-Object -Last 5 | Write-Host
+$env:SKIP_INSTALLS = "true"
+node scripts/prepackage.js --target $Target 2>&1 | Select-Object -Last 10 | Write-Host
+$env:SKIP_INSTALLS = $null
+Write-Ok "Prepackage done"
+
+Write-Timer "Packaging VSIX (target: $Target)..."
+npx @vscode/vsce package --out ./build --no-dependencies --target $Target 2>&1 | Select-Object -Last 10 | Write-Host
 Pop-Location
 
 # --- Result ---

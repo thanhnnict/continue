@@ -64,7 +64,7 @@ if ! command -v node &>/dev/null; then
 fi
 NODE_VER=$(node --version)
 NPM_VER=$(npm --version)
-NODE_MAJOR=$(echo "$NODE_VER" | grep -oP '\d+' | head -1)
+NODE_MAJOR=$(echo "$NODE_VER" | grep -oE '\d+' | head -1)
 if [[ "$NODE_MAJOR" != "20" ]]; then
   warn "Node.js version is $NODE_VER — expected v20.x"
   warn "Switch with: nvm use 20"

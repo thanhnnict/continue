@@ -60,7 +60,7 @@ release/v2.1.x-onprem  ←── stable snapshot, build VSIX deploy
 | 2 | `02-tool-arguments-json-sanitize.md` | `core/llm/openaiTypeConverters.ts` | Malformed JSON | Sanitize tool_calls arguments trước khi gửi lại trong conversation history — tránh vLLM 400 |
 | 3 | `04-vision-proxy.md` | `core/llm/visionProxy.ts`, `core/llm/index.ts`, `core/index.d.ts` | Image support | Vision proxy — route images qua VLM cho text-only LLMs |
 | 4 | — | `extensions/vscode/src/extension.ts`, `packages/fetch/src/getAgentOptions.ts` | TLS self-signed | Cho phép self-signed certs trong môi trường on-prem (internal CA) |
-| 5 | — | `gui/src/components/StepContainer/ResponseActions.tsx`, `gui/src/components/mainInput/ContextStatus.tsx` | UX | Always-on context usage display với sub-1% precision |
+| 5 | `09-always-on-context-usage.md` | `gui/src/components/StepContainer/ResponseActions.tsx`, `gui/src/components/mainInput/ContextStatus.tsx` | UX | Always-on context usage display với sub-1% precision |
 | 6 | — | `core/llm/toolSupport.ts` | Tool support | Cải thiện tool support compatibility |
 | 7 | — | `packages/config-yaml/src/schemas/models.ts` | Config | Model schema adjustments |
 | 8 | `08-tls-self-signed-fix.md` | `packages/fetch/src/getAgentOptions.ts`, `extensions/vscode/src/extension.ts` | TLS self-signed | Default `rejectUnauthorized: false` + `NODE_TLS_REJECT_UNAUTHORIZED=0` cho on-prem |
@@ -198,6 +198,7 @@ Tăng PATCH +1 mỗi lần build có thay đổi code. Reset về `.1` khi sync 
 - [`06-capacity-planning-300-users.md`](./06-capacity-planning-300-users.md) — Capacity planning
 - [`07-huong-dan-dong-gop-pr-cong-dong.md`](./07-huong-dan-dong-gop-pr-cong-dong.md) — PR contribution guide
 - [`08-tls-self-signed-fix.md`](./08-tls-self-signed-fix.md) — Patch #4: TLS self-signed cert fix
+- [`09-always-on-context-usage.md`](./09-always-on-context-usage.md) — Patch #5: Always-on context usage display
 
 **Build & Deploy documentation (`deploy/`):**
 - [`deploy/README.md`](../deploy/README.md) — Air-gap deployment guide

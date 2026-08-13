@@ -3,8 +3,9 @@
 # build-macos.sh — Build Continue VSIX on macOS
 #
 # Requirements:
-#   - Node.js 20.x via nvm: nvm install 20 && nvm use 20
-#   - OR Homebrew: brew install node@20
+#   - Node.js 20.x via conda env 'node20' (recommended, isolated)
+#   - OR Node.js 20.x via nvm: nvm install 20 && nvm use 20
+#   - OR Node.js 20.x via Homebrew: brew install node@20
 #
 # Usage:
 #   bash build-macos.sh [--target darwin-arm64|darwin-x64]
@@ -57,30 +58,105 @@ echo ""
 
 cd "$REPO_ROOT"
 
-# --- Verify Node.js ---
-info "Checking Node.js version..."
-if ! command -v node &>/dev/null; then
-  error "Node.js not found. Install via: nvm install 20 or brew install node@20"
+# --- OneDrive / Cloud Storage Detection ---
+info "Checking workspace location..."
+if [[ "$REPO_ROOT" == *"CloudStorage"* ]] || [[ "$REPO_ROOT" == *"OneDrive"* ]] || [[ "$REPO_ROOT" == *"Dropbox"* ]] || [[ "$REPO_ROOT" == *"Google Drive"* ]] || [[ "$REPO_ROOT" == *"iCloud"* ]]; then
+  echo ""
+  echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo -e "${RED}  ⚠️  WARNING: Workspace on Cloud Storage${NC}"
+  echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  echo "  Path: $REPO_ROOT"
+  echo ""
+  echo "  Building on cloud-synced folders (OneDrive, Dropbox, etc.)"
+  echo "  causes severe I/O bottleneck. prepackage.js may HANG"
+  echo "  indefinitely due to file sync contention."
+  echo ""
+  echo -e "  ${YELLOW}Recommendation:${NC} Move workspace to local disk:"
+  echo "    git clone <repo> ~/projects/continue-src"
+  echo ""
+  echo -e "  See: ${YELLOW}.patches/issues/01-onedrive-build-performance.md${NC}"
+  echo ""
+  echo -e "${RED}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+  echo ""
+  read -p "  Continue anyway? [y/N] " -n 1 -r
+  echo ""
+  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
+    info "Build cancelled. Move workspace to local disk and retry."
+    exit 1
+  fi
+  warn "Proceeding with cloud storage — build may hang..."
+  echo ""
+else
+  success "Workspace on local disk"
 fi
-NODE_VER=$(node --version)
-NPM_VER=$(npm --version)
-NODE_MAJOR=$(echo "$NODE_VER" | grep -oE '\d+' | head -1)
-if [[ "$NODE_MAJOR" != "20" ]]; then
-  warn "Node.js version is $NODE_VER — expected v20.x"
-  warn "Switch with: nvm use 20"
+
+# --- Detect Node.js environment ---
+info "Detecting Node.js environment..."
+
+USE_CONDA=false
+NODE_CMD="node"
+NPM_CMD="npm"
+
+# Check conda env 'node20' first (isolated environment, recommended)
+if command -v conda &>/dev/null && conda env list 2>/dev/null | grep -q "^node20"; then
+  info "Found conda env 'node20' — using isolated environment"
+  USE_CONDA=true
+  NODE_CMD="conda run -n node20 node"
+  NPM_CMD="conda run -n node20 npm"
+
+  # Verify conda node20 works
+  CONDA_NODE_VER=$($NODE_CMD --version 2>/dev/null || echo "N/A")
+  if [[ "$CONDA_NODE_VER" == "N/A" ]]; then
+    error "conda env 'node20' found but node command failed"
+  fi
+  success "conda node20: $CONDA_NODE_VER"
+else
+  info "conda env 'node20' not found — checking system Node.js..."
 fi
-success "Node: $NODE_VER | npm: $NPM_VER"
+
+# If not using conda, verify system Node.js
+if [[ "$USE_CONDA" == "false" ]]; then
+  if ! command -v node &>/dev/null; then
+    error "Node.js not found. Install via one of:\n" \
+          "  1. conda: conda create -n node20 -y nodejs=20  (recommended)\n" \
+          "  2. nvm:   nvm install 20 && nvm use 20\n" \
+          "  3. brew:  brew install node@20"
+  fi
+
+  NODE_VER=$(node --version)
+  NPM_VER=$(npm --version)
+  NODE_MAJOR=$(echo "$NODE_VER" | grep -oE '\d+' | head -1)
+
+  if [[ "$NODE_MAJOR" != "20" ]]; then
+    warn "Node.js version is $NODE_VER — expected v20.x"
+    warn "Strongly recommend using conda env 'node20' for isolated builds:"
+    warn "  conda create -n node20 -y nodejs=20"
+  fi
+  success "System Node: $NODE_VER | npm: $NPM_VER"
+fi
 
 # --- Verify branch ---
 BRANCH=$(git branch --show-current)
 info "Branch: $BRANCH"
+
+# --- Helper: run npm with correct environment ---
+run_npm() {
+  local dir="$1"
+  shift
+  if [[ "$USE_CONDA" == "true" ]]; then
+    bash -c "cd '$dir' && $NPM_CMD $* 2>&1"
+  else
+    bash -c "cd '$dir' && npm $* 2>&1"
+  fi
+}
 
 # --- Build packages ---
 if [[ "$SKIP_PACKAGES" == "false" ]]; then
   timer "Building packages..."
   for pkg in config-types llm-info fetch openai-adapters config-yaml terminal-security; do
     timer "  packages/$pkg"
-    bash -c "cd packages/$pkg && npm run build 2>&1 | tail -2"
+    run_npm "$REPO_ROOT/packages/$pkg" "run build" | tail -2
   done
   success "Packages built"
 fi
@@ -88,21 +164,29 @@ fi
 # --- Build core & gui ---
 if [[ "$ONLY_EXT" == "false" ]]; then
   timer "Building core..."
-  bash -c "cd core && npm run build 2>&1 | tail -3"
+  run_npm "$REPO_ROOT/core" "run build" | tail -3
   success "Core built"
 
   timer "Building gui..."
-  bash -c "cd gui && npm run build 2>&1 | tail -3"
+  run_npm "$REPO_ROOT/gui" "run build" | tail -3
   success "GUI built"
 fi
 
 # --- Build extension ---
 timer "Packaging extension (target: $TARGET)..."
-bash -c "
-  cd extensions/vscode &&
-  npm run prepackage -- --target $TARGET 2>&1 | tail -5 &&
-  npm run package -- --target $TARGET 2>&1 | tail -5
-"
+if [[ "$USE_CONDA" == "true" ]]; then
+  bash -c "
+    cd '$REPO_ROOT/extensions/vscode' &&
+    $NPM_CMD run prepackage -- --target $TARGET 2>&1 | tail -5 &&
+    $NPM_CMD run package -- --target $TARGET 2>&1 | tail -5
+  "
+else
+  bash -c "
+    cd '$REPO_ROOT/extensions/vscode' &&
+    npm run prepackage -- --target $TARGET 2>&1 | tail -5 &&
+    npm run package -- --target $TARGET 2>&1 | tail -5
+  "
+fi
 
 # --- Result ---
 VSIX=$(ls "$REPO_ROOT/extensions/vscode/build/continue-${TARGET}-"*.vsix 2>/dev/null | head -1)

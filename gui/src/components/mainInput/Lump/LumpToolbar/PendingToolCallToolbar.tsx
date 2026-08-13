@@ -36,17 +36,17 @@ export function PendingToolCallToolbar() {
   };
 
   return (
-    <div className="flex w-full flex-col pb-0.5">
+    <div className="flex w-full min-w-0 flex-col pb-0.5">
       {pendingToolCalls.map((toolCall, index) => (
         <div
           key={toolCall.toolCallId}
-          className="border-input bg-input flex items-center gap-2 rounded border overflow-hidden"
+          className="border-input bg-input flex min-w-0 items-center rounded border"
         >
-          <span className="text-description min-w-0 flex-1 truncate text-xs italic">
+          <span className="text-description min-w-0 shrink truncate px-1 text-xs italic">
             {toolCall.tool?.displayTitle ?? toolCall.toolCall.function.name}
           </span>
 
-          <div className="flex shrink-0 items-center gap-1">
+          <div className="ml-auto flex shrink-0 items-center gap-1 pr-1">
             <Button
               variant="ghost"
               size="sm"

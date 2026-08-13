@@ -249,7 +249,7 @@ else
 fi
 
 # --- Result ---
-VSIX=$(ls "$REPO_ROOT/extensions/vscode/build/continue-${TARGET}-"*.vsix 2>/dev/null | head -1)
+VSIX=$(ls -t "$REPO_ROOT/extensions/vscode/build/continue-${TARGET}-"*.vsix 2>/dev/null | head -1)
 [[ -z "$VSIX" ]] && error "Build failed — no VSIX found"
 
 END_TIME=$(date +%s)

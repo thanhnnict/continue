@@ -4,9 +4,11 @@
 
 **Issue**: Continue extension's built-in `runTerminalCommand` tool không thể capture output khi làm việc trên Remote SSH environment.
 
-**Status**: ✅ **Solved** (2025-08-20)
+**Status**: 🔴 **UNRESOLVED — In Progress** (updated 2026-08-20)
 
-**Solution**: Tạo MCP server `remote-ssh-terminal` chạy trên local Mac, dùng SSH để execute commands trên remote và capture stdout/stderr.
+**Goal**: Fix built-in `runTerminalCommand` tool để capture output trên remote SSH, thay vì trả về placeholder message.
+
+**Workarounds (tạm thời)**: 2 MCP servers đã được tạo (`mcp-remote-ssh/`, `mcp-remote-terminal/`) nhưng chưa được deploy/test.
 
 ---
 
@@ -93,27 +95,324 @@ Khi làm việc trên Remote SSH:
 ### 3. Why Built-in Tool Fails
 
 ```typescript
-// core/tools/implementations/runTerminalCommand.ts
-export class RunTerminalCommandTool implements Tool {
-  async execute(command: string): Promise<ToolResult> {
-    if (this.isRemote()) {
-      // ❌ Remote: chỉ send command, không capture output
-      await this.ide.runCommand(command);
-      return {
-        success: true,
-        output: "Command executed in remote terminal. Output capture is not yet available for remote environments."
-      };
-    } else {
-      // ✅ Local: dùng child_process, capture output
-      return this.executeLocal(command);
-    }
+// core/tools/implementations/runTerminalCommand.ts (line ~100)
+const LOCAL_ONLY = ["", "local"];
+
+export const runTerminalCommandImpl: ToolImpl = async (args, extras) => {
+  const command = getStringArg(args, "command");
+  const waitForCompletion = getBooleanArg(args, "waitForCompletion", false) ?? true;
+
+  const ideInfo = await extras.ide.getIdeInfo();
+
+  if (LOCAL_ONLY.includes(ideInfo.remoteName)) {
+    // ✅ LOCAL: child_process.spawn() — capture stdout/stderr
+    // ... (full implementation with streaming, timeout, etc.)
+  }
+
+  // ❌ REMOTE: delegate to VS Code terminal — NO output capture
+  await extras.ide.runCommand(command);
+  return [
+    {
+      name: "Terminal",
+      description: "Terminal command output",
+      content:
+        "Command executed in remote terminal. Output capture is not yet available for remote environments.",
+      status: "Command executed",
+    },
+  ];
+};
+```
+
+**Comment trong code (line ~95)**:
+```typescript
+// Only spawn processes locally when there is no remote workspace.
+// With extensionKind: ["ui", "workspace"], the extension host almost always
+// runs on the local machine. childProcess.spawn() executes on the extension
+// host, so for any remote workspace it would run commands on the wrong machine
+// (or fail with ENOENT when the local shell doesn't match the remote OS).
+// All remote types delegate to ide.runCommand() which routes through VS Code's
+// integrated terminal and executes in the correct remote environment.
+```
+
+**⚠️ Comment này CŨ — cần verify lại**:
+- Comment nói "extension host almost always runs on the local machine"
+- Nhưng với `extensionKind: ["ui", "workspace"]`, VS Code **thường** chạy extension host trên **remote**
+- Nếu extension host chạy trên remote, `child_process.spawn()` sẽ chạy trên remote (đúng chỗ)
+- **Cần test**: Verify extension host thực sự chạy ở đâu khi Remote SSH
+
+### 4. Existing `CapturedTerminal` (Commented Out)
+
+```typescript
+// extensions/vscode/src/terminal/terminalEmulator.ts (line 1)
+/* Terminal emulator - commented because node-pty is causing problems. */
+```
+
+**Class `CapturedTerminal`** đã tồn tại nhưng bị comment out:
+- Dùng `node-pty` để tạo pseudo-terminal
+- Có `runCommand()` method với output capture
+- Dùng `vscode.Pseudoterminal` API để tạo custom terminal
+- **Vấn đề**: `node-pty` gây problems (native module, build issues)
+
+```typescript
+// extensions/vscode/src/terminal/terminalEmulator.ts
+export class CapturedTerminal {
+  async runCommand(command: string): Promise<string> {
+    // ... queue management
+    this.terminal.sendText(command);
+    const output = await this.waitForCommandToFinish();
+    return output; // ✅ Captures output!
+  }
+
+  private async waitForCommandToFinish() {
+    return new Promise<string>((resolve, reject) => {
+      this.onDataListeners.push((data: any) => {
+        const strippedData = stripAnsi(data);
+        this.dataBuffer += strippedData;
+        if (this.dataEndsInPrompt(strippedData)) {
+          resolve(this.dataBuffer); // ✅ Output captured
+          this.dataBuffer = "";
+          this.onDataListeners = [];
+        }
+      });
+    });
   }
 }
 ```
 
+**Tại sao bị comment out**: `node-pty` là native module, gây build issues trên một số platforms.
+
 ---
 
-## 💡 Solution: MCP Remote SSH Terminal Server
+## 📁 Source Code Map
+
+### Files liên quan đến issue
+
+| File | Role | Key Code |
+|------|------|----------|
+| `core/tools/implementations/runTerminalCommand.ts` | Tool implementation | `LOCAL_ONLY` check, remote fallback (line ~100) |
+| `extensions/vscode/src/VsCodeIde.ts` | VS Code IDE adapter | `runCommand()` method (line ~295) |
+| `extensions/vscode/src/terminal/terminalEmulator.ts` | CapturedTerminal (commented) | `CapturedTerminal` class, `node-pty` |
+| `core/index.d.ts` | IDE interface | `runCommand(): Promise<void>` (line ~470) |
+| `core/protocol/ide.ts` | Protocol definition | `runCommand: [{ command, options }, void]` |
+| `core/protocol/messenger/messageIde.ts` | Message proxy | `runCommand()` → `this.request("runCommand", ...)` |
+| `extensions/vscode/package.json` | Extension manifest | `extensionKind: ["ui", "workspace"]` |
+
+### Call chain
+
+```
+Model calls runTerminalCommand tool
+  → core/tools/implementations/runTerminalCommand.ts:runTerminalCommandImpl()
+    → extras.ide.getIdeInfo() → checks remoteName
+    → if LOCAL_ONLY: child_process.spawn() → capture output ✅
+    → if REMOTE: extras.ide.runCommand(command)
+      → core/protocol/messenger/messageIde.ts:runCommand()
+        → this.request("runCommand", { command, options })
+          → extensions/vscode/src/VsCodeIde.ts:runCommand()
+            → terminal.sendText(command, false) → NO output capture ❌
+```
+
+### IDE Interface (core/index.d.ts)
+
+```typescript
+export interface IDE {
+  // ... other methods ...
+  runCommand(command: string, options?: TerminalOptions): Promise<void>;
+  // ... other methods ...
+}
+
+export interface TerminalOptions {
+  reuseTerminal?: boolean;
+  terminalName?: string;
+  waitForCompletion?: boolean;
+}
+```
+
+**⚠️ `runCommand()` trả về `Promise<void>` — KHÔNG có output!**
+
+### Protocol (core/protocol/ide.ts)
+
+```typescript
+export type ToIdeFromWebviewOrCoreProtocol = {
+  // ... other methods ...
+  runCommand: [{ command: string; options?: TerminalOptions }, void];
+  // ... other methods ...
+};
+```
+
+**⚠️ Protocol trả về `void` — KHÔNG có output!**
+
+---
+
+## 💡 Solution Options
+
+### Option A: Fix `runCommand()` để capture output (RECOMMENDED)
+
+**Approach**: Modify `VsCodeIde.runCommand()` để capture output từ terminal.
+
+**Challenge**: VS Code API `vscode.Terminal` không có method để capture output.
+
+**Possible approaches**:
+
+1. **Dùng `vscode.Pseudoterminal` API** (tương tự `CapturedTerminal` đã có)
+   - Tạo custom terminal với `vscode.window.createTerminal({ pty })`
+   - Capture output qua `onDidWrite` event
+   - **Problem**: Cần `node-pty` (native module, build issues)
+
+2. **Dùng `child_process.spawn()` trực tiếp** (nếu extension host chạy trên remote)
+   - Verify extension host chạy trên remote (với `extensionKind: ["ui", "workspace"]`)
+   - Nếu đúng, dùng `child_process.spawn()` như local path
+   - **Advantage**: Không cần `node-pty`, không cần VS Code terminal
+   - **Risk**: Cần verify extension host location
+
+3. **Dùng `vscode.window.createTerminal()` + polling**
+   - Tạo terminal, send command
+   - Poll terminal output qua `vscode.window.activeTerminal`
+   - **Problem**: VS Code API không expose terminal output
+
+4. **Dùng `vscode.commands.executeCommand("workbench.action.terminal.sendSequence")`**
+   - Execute command qua VS Code command
+   - **Problem**: Vẫn không capture output
+
+**Best approach**: **Option 2** — Verify extension host location, nếu chạy trên remote thì dùng `child_process.spawn()` trực tiếp.
+
+### Option B: MCP Server Workaround (TEMPORARY)
+
+**Approach**: Tạo MCP server chạy trên remote, dùng `child_process.spawn()` để capture output.
+
+**2 MCP servers đã được tạo**:
+
+#### 1. `mcp-remote-terminal/` (chạy trên remote)
+
+- Chạy trên remote server (nơi extension host chạy)
+- Dùng `child_process.spawn()` trực tiếp
+- Capture stdout/stderr
+- **Status**: Created, chưa deploy/test
+
+#### 2. `mcp-remote-ssh/` (chạy trên local, SSH đến remote)
+
+- Chạy trên local Mac
+- Dùng `ssh` command để execute trên remote
+- Capture stdout/stderr từ SSH
+- **Status**: Created, chưa deploy/test
+
+**⚠️ Vấn đề với Option B**:
+- MCP server là workaround, không fix root cause
+- Cần deploy MCP server lên remote (hoặc local)
+- Cần config trong `~/.continue/config.yaml`
+- Không integrate với built-in tool (model phải gọi MCP tool thay vì built-in)
+
+### Option C: Hybrid — Fix built-in + MCP fallback
+
+**Approach**:
+1. Fix built-in `runTerminalCommand` để capture output trên remote (Option A)
+2. Giữ MCP servers như fallback cho edge cases
+
+**Steps**:
+1. Verify extension host location trên remote SSH
+2. Nếu extension host chạy trên remote: dùng `child_process.spawn()` trong `runTerminalCommandImpl()`
+3. Update `IDE.runCommand()` interface để trả về output
+4. Update protocol để truyền output
+5. Test trên remote SSH
+
+---
+
+## 🔬 Investigation Steps (TODO)
+
+### Step 1: Verify Extension Host Location
+
+**Question**: Khi Remote SSH, extension host chạy trên local hay remote?
+
+**Test**:
+```typescript
+// Thêm vào VsCodeIde.ts hoặc runTerminalCommand.ts
+const ideInfo = await extras.ide.getIdeInfo();
+console.log("Remote name:", ideInfo.remoteName);
+console.log("Platform:", process.platform);
+console.log("Hostname:", os.hostname());
+console.log("Home:", process.env.HOME);
+```
+
+**Expected**:
+- Nếu extension host chạy trên remote: `hostname` = remote hostname, `HOME` = `/home/devops`
+- Nếu extension host chạy trên local: `hostname` = local Mac hostname, `HOME` = `/Users/goku-`
+
+### Step 2: Test `child_process.spawn()` trên Remote
+
+**Test**:
+```typescript
+// Trong runTerminalCommandImpl(), trước khi check LOCAL_ONLY
+const testResult = await new Promise((resolve) => {
+  const child = childProcess.spawn("echo", ["test from extension host"], {
+    shell: true,
+  });
+  let output = "";
+  child.stdout.on("data", (data) => output += data.toString());
+  child.on("close", () => resolve(output));
+});
+console.log("child_process test:", testResult);
+```
+
+**Expected**:
+- Nếu extension host chạy trên remote: output = "test from extension host\n" (chạy trên remote)
+- Nếu extension host chạy trên local: output = "test from extension host\n" (chạy trên local)
+
+**⚠️ Test này không phân biệt được local/remote — cần check hostname**
+
+### Step 3: Modify `runCommand()` để Capture Output
+
+**Nếu extension host chạy trên remote**:
+
+```typescript
+// core/tools/implementations/runTerminalCommand.ts
+export const runTerminalCommandImpl: ToolImpl = async (args, extras) => {
+  const command = getStringArg(args, "command");
+  const waitForCompletion = getBooleanArg(args, "waitForCompletion", false) ?? true;
+
+  const ideInfo = await extras.ide.getIdeInfo();
+
+  // ✅ NEW: Check if extension host is on the same machine as workspace
+  // If yes, use child_process.spawn() (works for both local and remote)
+  const isExtensionHostOnWorkspace = await checkExtensionHostLocation(extras.ide);
+
+  if (isExtensionHostOnWorkspace) {
+    // Use child_process.spawn() — capture stdout/stderr
+    // (same as local path)
+    return executeWithSpawn(command, waitForCompletion, extras);
+  }
+
+  // Fallback: use VS Code terminal (no output capture)
+  await extras.ide.runCommand(command);
+  return [
+    {
+      name: "Terminal",
+      description: "Terminal command output",
+      content: "Command executed in remote terminal. Output capture not available.",
+      status: "Command executed",
+    },
+  ];
+};
+```
+
+### Step 4: Update IDE Interface (nếu cần)
+
+```typescript
+// core/index.d.ts
+export interface IDE {
+  // ... other methods ...
+  runCommand(command: string, options?: TerminalOptions): Promise<{
+    stdout: string;
+    stderr: string;
+    exitCode: number;
+  }>;
+  // ... other methods ...
+}
+```
+
+**⚠️ Breaking change** — cần update tất cả callers.
+
+---
+
+## 💡 Solution: MCP Remote SSH Terminal Server (Workaround)
 
 ### Architecture
 
@@ -649,37 +948,46 @@ const targetHost = host || REMOTE_HOST;
 | Date | Version | Changes |
 |------|---------|---------|
 | 2025-08-20 | 1.0.0 | Initial release - MCP Remote SSH Terminal Server |
+| 2026-08-20 | 2.0.0 | **Update**: Status → UNRESOLVED, thêm source code map, solution options, investigation steps, MCP servers details |
 
 ---
 
-## ✅ Current Status (2025-08-20)
+## ✅ Current Status (2026-08-20)
 
 ### Completed
 
 - ✅ Root cause analysis
-- ✅ Solution design
-- ✅ MCP server implementation
-- ✅ Testing (6/6 tests passed)
-- ✅ Configuration
+- ✅ Solution design (3 options)
+- ✅ MCP server implementation (2 servers)
+- ✅ Source code map
 - ✅ Documentation
 
-### Active
+### In Progress
 
-- ✅ MCP server deployed trên local Mac
-- ✅ Config.yaml updated
-- ✅ Ready to use
+- 🔴 Verify extension host location trên remote SSH
+- 🔴 Test `child_process.spawn()` trên remote
+- 🔴 Fix built-in `runTerminalCommand` để capture output
+
+### Not Started
+
+- ⬜ Deploy MCP servers (workaround)
+- ⬜ Test MCP servers
+- ⬜ Update IDE interface (nếu cần)
+- ⬜ Update protocol (nếu cần)
 
 ### Next Steps
 
-1. **User**: Reload VS Code window
-2. **User**: Test MCP server trên remote SSH workspace
-3. **Monitor**: Gather feedback từ actual usage
-4. **Enhance**: Implement future enhancements based on feedback
+1. **Verify**: Extension host location trên remote SSH (Step 1)
+2. **Test**: `child_process.spawn()` trên remote (Step 2)
+3. **Implement**: Fix built-in tool (Step 3)
+4. **Update**: IDE interface + protocol (Step 4)
+5. **Test**: End-to-end trên remote SSH
+6. **Deploy**: MCP servers như fallback (nếu cần)
 
 ---
 
 ## 📞 Contact
 
-**Issue reported by**: goku-  
-**Resolved by**: goku- + AI assistant  
-**Date resolved**: 2025-08-20
+**Issue reported by**: goku-
+**Status**: In Progress
+**Last updated**: 2026-08-20

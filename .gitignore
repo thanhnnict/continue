@@ -238,3 +238,27 @@ deploy.zip
 *.min.js
 *.min.css
 *.map
+
+# VS Code (keep essential files)
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+!.vscode/launch.json
+!.vscode/tasks.json
+
+# Ollama local models
+.ollama/
+
+# IDE (additional)
+.idea/
+
+# Environment files (keep example)
+.env.*
+!.env.example
+
+# Logs (additional)
+logs/
+
+# OS (additional)
+Thumbs.db
+desktop.ini

@@ -1,4 +1,4 @@
-# build-windows.ps1 - Build Continue VSCode Extension on Windows (Fresh or Incremental)
+﻿# build-windows.ps1 - Build Continue VSCode Extension on Windows (Fresh or Incremental)
 #
 # ONE-COMMAND BUILD: handles everything from npm install to final VSIX.
 # Safe to run on fresh environment or after clean.
@@ -80,12 +80,12 @@ if (-not $UseCondaNode) {
 
 function npm-run {
     param([string]$NpmCmd, [string]$WorkDir, [string]$Label)
-    if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 npm $NpmCmd" $WorkDir $Label }
+    if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 --no-capture-output npm $NpmCmd" $WorkDir $Label }
     else               { Invoke-Cmd "npm $NpmCmd" $WorkDir $Label }
 }
 function npx-run {
     param([string]$NpxCmd, [string]$WorkDir, [string]$Label)
-    if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 npx $NpxCmd" $WorkDir $Label }
+    if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 --no-capture-output npx $NpxCmd" $WorkDir $Label }
     else               { Invoke-Cmd "npx $NpxCmd" $WorkDir $Label }
 }
 function node-run {
@@ -93,7 +93,10 @@ function node-run {
     $saved = if ($EnvVar -ne "") { $EnvVar.Split("=",2) } else { $null }
     if ($saved) { [System.Environment]::SetEnvironmentVariable($saved[0], $saved[1]) }
     try {
-        if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 node $NodeCmd" $WorkDir $Label 10 }
+        # --no-capture-output: conda run forwards child stdout/stderr & exit code directly.
+        # Without it, conda buffers output and can return a non-zero exit code even when
+        # the node script succeeds (any stderr write confuses the wrapper).
+        if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 --no-capture-output node $NodeCmd" $WorkDir $Label 10 }
         else               { Invoke-Cmd "node $NodeCmd" $WorkDir $Label 10 }
     } finally {
         if ($saved) { [System.Environment]::SetEnvironmentVariable($saved[0], $null) }
@@ -239,6 +242,30 @@ Write-Host "  $($vsix.Name)"
 Write-Host "  $sizeMB MB"
 Write-Host "================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Install command:" -ForegroundColor White
-Write-Host "  code --install-extension '$($vsix.FullName)' --force" -ForegroundColor Gray
+
+# Determine the correct code CLI path
+$codeCli = "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd"
+if (-not (Test-Path $codeCli)) { $codeCli = "code" }
+
+Write-Host "Install (PowerShell 7 / pwsh):" -ForegroundColor White
+Write-Host "  cmd /c `"$codeCli`" --install-extension `"$($vsix.FullName)`" --force" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Install (CMD):" -ForegroundColor White
+Write-Host "  `"$codeCli`" --install-extension `"$($vsix.FullName)`" --force" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Auto-install now? (y/N)" -ForegroundColor Yellow -NoNewline
+$answer = Read-Host " "
+if ($answer -match "^[yY]$") {
+    Write-Host "Installing..." -ForegroundColor Cyan
+    $proc = Start-Process -FilePath "cmd.exe" `
+        -ArgumentList "/c `"`"$codeCli`" --install-extension `"$($vsix.FullName)`" --force`"" `
+        -Wait -PassThru -NoNewWindow
+    if ($proc.ExitCode -eq 0) {
+        Write-Host "[OK]    Installed successfully — reload VSCode (Ctrl+Shift+P → Developer: Reload Window)" -ForegroundColor Green
+    } else {
+        Write-Host "[WARN]  Install exited $($proc.ExitCode) — try the CMD command above manually" -ForegroundColor Yellow
+    }
+} else {
+    Write-Host "  Run the Install command above in CMD to install." -ForegroundColor Gray
+}
 Write-Host ""

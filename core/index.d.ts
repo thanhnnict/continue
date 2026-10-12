@@ -892,6 +892,18 @@ export interface IDE {
 
   runCommand(command: string, options?: TerminalOptions): Promise<void>;
 
+  /**
+   * Run a command in the remote terminal and capture its output.
+   * Uses VS Code shellIntegration API (VSCode 1.93+).
+   * Falls back to clipboard-based capture if shellIntegration is unavailable.
+   * Primarily used for WSL/SSH remote environments where childProcess.spawn() cannot execute.
+   * Returns { output, exitCode } — output is stdout+stderr combined, exitCode is null if unknown.
+   */
+  runCommandWithOutput(
+    command: string,
+    timeoutMs?: number,
+  ): Promise<{ output: string; exitCode: number | null }>;
+
   saveFile(fileUri: string): Promise<void>;
 
   readFile(fileUri: string): Promise<string>;

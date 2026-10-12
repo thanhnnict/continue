@@ -39,11 +39,11 @@ function getShellCommand(command: string): { shell: string; args: string[] } {
 import { fileURLToPath } from "node:url";
 import { ToolImpl } from ".";
 import {
-  isProcessBackgrounded,
-  markProcessAsRunning,
-  removeBackgroundedProcess,
-  removeRunningProcess,
-  updateProcessOutput,
+    isProcessBackgrounded,
+    markProcessAsRunning,
+    removeBackgroundedProcess,
+    removeRunningProcess,
+    updateProcessOutput,
 } from "../../util/processTerminalStates";
 import { getBooleanArg, getStringArg } from "../parseArgs";
 
@@ -555,7 +555,54 @@ export const runTerminalCommandImpl: ToolImpl = async (args, extras) => {
 
   // For remote environments (SSH, WSL, Dev Container, Codespaces, etc.),
   // delegate to VS Code's integrated terminal which handles remote execution.
-  // Note: output capture and waitForCompletion are not yet supported for remotes.
+  //
+  // WSL remote: use runCommandWithOutput() which leverages shellIntegration API
+  // (VS Code 1.93+) to capture output. Falls back to clipboard-based capture.
+  //
+  // Other remotes (SSH, DevContainer, Codespaces): output capture not yet supported.
+  if (ideInfo.remoteName === "wsl") {
+    try {
+      const { output, exitCode } = await extras.ide.runCommandWithOutput(
+        command,
+        DEFAULT_TOOL_TIMEOUT_MS,
+      );
+
+      // Stream partial output if callback available
+      if (extras.onPartialOutput && output) {
+        extras.onPartialOutput({
+          toolCallId,
+          contextItems: [
+            {
+              name: "Terminal",
+              description: "Terminal command output",
+              content: output,
+              status: exitCode === 0 || exitCode === null ? "Command completed" : `Command exited with code ${exitCode}`,
+            },
+          ],
+        });
+      }
+
+      return [
+        {
+          name: "Terminal",
+          description: "Terminal command output",
+          content: output || "(no output)",
+          status: exitCode === 0 || exitCode === null ? "Command completed" : `Command exited with code ${exitCode}`,
+        },
+      ];
+    } catch (err: any) {
+      return [
+        {
+          name: "Terminal",
+          description: "Terminal command output",
+          content: `Command failed: ${err?.message ?? String(err)}`,
+          status: "Command failed",
+        },
+      ];
+    }
+  }
+
+  // Other remote types: SSH, DevContainer, Codespaces — output capture not yet supported.
   await extras.ide.runCommand(command);
   return [
     {

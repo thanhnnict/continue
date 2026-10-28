@@ -307,6 +307,11 @@ Patch này **chỉ xử lý `remoteName = "wsl"`**. Các remote environment khá
 (`"ssh-remote"`, `"dev-container"`, `"codespaces"`) vẫn dùng fallback cũ —
 về lý thuyết có thể áp dụng cùng approach nhưng chưa được test.
 
+> **Cập nhật 2026-10-27:** Patch 13 (`feature/20261026.terminal-remote-ssh`)
+> đã mở rộng support cho toàn bộ các remote này. Engine từ patch 10 đã
+> remote-agnostic ngay từ đầu — patch 13 chỉ bỏ gate `=== "wsl"` và thêm
+> circuit breaker + POSIX wrapper fixes. Xem `.patches/13-ssh-remote-terminal-output-capture.md`.
+
 ---
 
 ## Upstream status

@@ -4,6 +4,7 @@ import { exec } from "node:child_process";
 import { Range } from "core";
 import { DEFAULT_IGNORES, defaultIgnoresGlob } from "core/indexing/ignore";
 import { EXTENSION_NAME } from "core/util/constants";
+import { SHELL_INTEGRATION_MISSING_MESSAGE } from "core/util/remoteTerminal";
 import * as URI from "uri-js";
 import * as vscode from "vscode";
 
@@ -411,10 +412,38 @@ class VsCodeIde implements IDE {
     }
     if (!/^(file|vscode-remote)$/.test(baseUri.scheme)) return null;
 
+    // Resolve a writable temp dir on the REMOTE side.
+    //
+    // `/tmp` is the right default and is world-writable on Linux/macOS remotes
+    // (wsl, ssh-remote, dev-container, codespaces). But some hardened SSH targets
+    // mount /tmp noexec/nosuid or restrict it, and Windows-based SSH hosts have no
+    // /tmp at all — so probe with `fileExists` and fall back to the workspace root,
+    // which is always writable because that is where the user is editing files.
     const id = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-    const outPath  = `/tmp/continue_out_${id}`;
-    const donePath = `/tmp/continue_done_${id}`;
-    const outUri  = baseUri.with({ path: outPath });
+    const tmpOutPath = `/tmp/continue_out_${id}`;
+
+    let tmpWritable = false;
+    try {
+      tmpWritable = await vscode.workspace.fs.stat(
+        baseUri.with({ path: "/tmp" }),
+      ).then(
+        () => true,
+        () => false,
+      );
+    } catch {
+      tmpWritable = false;
+    }
+
+    // Strip any trailing slash so we don't build "//continue_out_x".
+    const workspaceRootPath = (baseUri.path || "/").replace(/\/+$/, "") || "/";
+    const outPath = tmpWritable
+      ? tmpOutPath
+      : `${workspaceRootPath}/.continue_out_${id}`;
+    const donePath = tmpWritable
+      ? `/tmp/continue_done_${id}`
+      : `${workspaceRootPath}/.continue_done_${id}`;
+
+    const outUri = baseUri.with({ path: outPath });
     const doneUri = baseUri.with({ path: donePath });
 
     // Read the user's output-mode preference.
@@ -431,19 +460,31 @@ class VsCodeIde implements IDE {
     let wrapped: string;
     if (outputMode === "visible") {
       // "visible" mode: tee duplicates output → terminal panel + file simultaneously.
-      // PIPESTATUS[0] captures the subshell exit code (tee always exits 0 otherwise).
-      // Display the original command as a comment before running so it's readable.
+      //
+      // POSIX-safe exit-code capture — works on bash, dash, sh (busybox, slim containers):
+      //
+      //   { cmd ; printf '%s\n' "$?" > donefile ; } 2>&1 | tee outfile
+      //
+      // The key insight: write the exit code INSIDE the left-hand group, before the pipe
+      // to tee. This avoids both bash-only constructs:
+      //   - `${PIPESTATUS[0]}` → "Bad substitution" on dash/sh
+      //   - `set -o pipefail`  → "Illegal option" on dash (exit 2, subshell aborts before
+      //                          tee runs, done-file is never written → stalls until timeout)
+      //
+      // tee always exits 0 so we cannot use the outer `$?`. Reading rc from inside the
+      // group is deterministic: the done-file is written synchronously before tee finishes.
+      //
+      // The original command is echoed as a comment so it stays readable in the terminal.
       const preview = command.length > 120 ? command.slice(0, 120) + "…" : command;
       wrapped =
         // Print the original command as a comment so users can read it in the terminal.
         `echo '# ${preview.replace(/'/g, "'\\''")}' ; ` +
-        `{ echo ${b64} | base64 -d | bash ; } 2>&1 | tee ${outPath} ; ` +
-        `echo \${PIPESTATUS[0]} > ${donePath}`;
+        `{ echo ${b64} | base64 -d | bash ; printf '%s\\n' "$?" > ${donePath} ; } 2>&1 | tee ${outPath}`;
     } else {
       // "silent" mode (default): no terminal output, pure file capture.
       wrapped =
         `{ echo ${b64} | base64 -d | bash ; } > ${outPath} 2>&1 ; ` +
-        `echo $? > ${donePath}`;
+        `printf '%s\\n' "$?" > ${donePath}`;
     }
 
     terminal.show(false);
@@ -550,9 +591,7 @@ class VsCodeIde implements IDE {
       terminal.sendText(effectiveCommand, true);
       await new Promise((r) => setTimeout(r, 1500));
       return {
-        output:
-          "(Shell integration not available — command sent but output could not be captured. " +
-          "Ensure VS Code shell integration is enabled for this terminal.)",
+        output: SHELL_INTEGRATION_MISSING_MESSAGE,
         exitCode: null,
       };
     }

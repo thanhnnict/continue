@@ -262,4 +262,6 @@ logs/
 # OS (additional)
 Thumbs.db
 desktop.ini
-build-log.txt
+
+# Agent scratch files - never commit (temp manifests, backups, config copies)
+.continue/tmp/

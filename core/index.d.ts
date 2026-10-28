@@ -1947,6 +1947,7 @@ export type RuleSource =
   | "rules-block"
   | "colocated-markdown"
   | "json-systemMessage"
+  | "config-yaml-systemMessage"
   | ".continuerules"
   | "agentFile";
 

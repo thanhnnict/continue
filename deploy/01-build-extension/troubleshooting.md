@@ -161,3 +161,102 @@ bash deploy/01-build-extension/00-pre-install.sh --target linux-x64
 | macOS arm64   |    ~50s    |      ~42s       |  ~12-14s   |
 | Linux/WSL x64 |  ~60-90s   |      ~50s       |  ~15-20s   |
 | Windows x64   |  ~60-90s   |      ~50s       |  ~15-20s   |
+
+---
+
+## Lỗi Windows build pipeline (v2.2.1 — 2026-10-12)
+
+Năm lỗi độc lập, **che khuất lẫn nhau** — sửa lần lượt mới thấy hết.
+Chi tiết đầy đủ: [Patch 12](../../.patches/12-windows-build-pipeline-fix.md).
+
+### `The string is missing the terminator` khi chạy `.ps1`
+
+```
+At ...\build-windows.ps1:264 char:86
++ ... e (Ctrl+Shift+P â†' Developer: Reload Window)"
+The string is missing the terminator: '.
+```
+
+**Nguyên nhân:** file `.ps1` chứa ký tự Unicode (`—`, `→`) nhưng không có UTF-8 BOM.
+Windows PowerShell 5.1 suy đoán ANSI/CP1252 khi không có BOM → `→` (`E2 86 92`) thành `â†'`
+→ sinh quote mở không đóng. PowerShell 7 mặc định UTF-8 nên **không** lỗi → dễ tưởng là lỗi shell.
+
+**Fix:** thêm BOM `EF BB BF` vào đầu file.
+
+```bash
+head -c 3 file.ps1 | xxd -p     # phai ra: efbbbf
+printf '\xef\xbb\xbf' > t.tmp && cat file.ps1 >> t.tmp && mv -f t.tmp file.ps1
+```
+
+### `npm error 403 Forbidden - GET http://localhost:7081/...`
+
+**Đánh lạc hướng:** thông báo gợi ý "security policy / forbidden package version", và URL
+chứa `npm-11.12.0.tgz` (npm tự tải chính nó). Nhưng `curl` vào đúng URL đó luôn trả **200**.
+
+**Nguyên nhân thật:** `~/.npmrc` đặt `proxy=`/`https-proxy=` toàn cục mà **không có**
+`noproxy`, nên npm đẩy cả request tới `localhost:7081` qua corporate proxy. Corporate proxy
+chặn Nexus nội bộ.
+
+```bash
+curl -x <corporate-proxy> http://localhost:7081/...   # 403  (0.05s)
+curl --noproxy '*'        http://localhost:7081/...   # 200  (0.12s)
+```
+
+npm retry 3 lần với timeout dài → log hiện `113830ms attempt #3`, càng giống lỗi mạng.
+
+**Fix:** `.\deploy\01-build-extension\sync-npmrc.ps1` — sinh `~/.npmrc` không proxy, có
+`noproxy`, tắt audit. npm **không cần** proxy: Nexus đã là proxy repo
+(`npm-group` → `npmjs` → `registry.npmjs.org`) và tự lo việc ra internet.
+
+```powershell
+npm config get proxy    # -> null
+npm config get noproxy  # -> localhost,127.0.0.1,::1,...
+```
+
+### `403 ... /-/npm/v1/security/advisories/bulk`
+
+**Nguyên nhân:** Nexus **không implement** npm audit API (`POST /-/npm/v1/security/*` trả
+400/403). npm tự chạy audit mỗi lần `npm install`.
+
+**Fix:** `audit=false` + `fund=false` trong `.npmrc` (sync-npmrc.ps1 đã viết sẵn).
+Env `npm_config_audit=false` không truyền chắc chắn vào `npm install` con trong
+`build-packages.js` → phải ghi vào `.npmrc`.
+
+### Build fail dù `✓ built in 59.52s` (GUI)
+
+```
+conda : Browserslist: browsers data (caniuse-lite) is 13 months old.
+    + FullyQualifiedErrorId : NativeCommandError
+```
+
+**Nguyên nhân:** `$ErrorActionPreference = "Stop"` + gộp `2>&1` khiến PowerShell biến
+**mỗi dòng stderr** của native command thành `ErrorRecord` → dừng script. vite/npm/conda đều
+dùng stderr cho warning hợp lệ. Build exit 0 vẫn chết.
+
+**Fix:** hạ preference quanh lời gọi, quyết định thành bại bằng `$LASTEXITCODE`:
+
+```powershell
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+try {
+    $out = Invoke-Expression "$CmdStr 2>&1"
+    if ($LASTEXITCODE -ne 0) { throw "$Label failed (exit $LASTEXITCODE)" }
+} finally { $ErrorActionPreference = $prevEap }
+```
+
+### Build treo ở `Auto-install now? (y/N)`
+
+Chạy nền / redirect log / `tail -f` → không ai trả lời được `Read-Host`.
+
+**Fix:** `-NoInstall`, hoặc script tự bỏ prompt khi stdin bị redirect. Lệnh install luôn được
+in ra để chạy tay.
+
+### `conda: The term 'conda' is not recognized`
+
+Continue chạy `pwsh -NoProfile` → profile user không load → conda không trong PATH.
+
+```powershell
+$env:Path = "C:\Users\thanhnn14\miniconda3;C:\Users\thanhnn14\miniconda3\Scripts;C:\Users\thanhnn14\miniconda3\condabin;" + $env:Path
+```
+
+Terminal tương tác bình thường đã có sẵn — không cần thêm dòng này.

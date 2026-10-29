@@ -1,4 +1,4 @@
-# build-windows.ps1 - Build Continue VSCode Extension on Windows (Fresh or Incremental)
+﻿# build-windows.ps1 - Build Continue VSCode Extension on Windows (Fresh or Incremental)
 #
 # ONE-COMMAND BUILD: handles everything from npm install to final VSIX.
 # Safe to run on fresh environment or after clean.
@@ -13,12 +13,17 @@
 #   .\deploy\01-build-extension\build-windows.ps1 -SkipPackages  # skip if packages already built
 #   .\deploy\01-build-extension\build-windows.ps1 -OnlyExt       # prepackage+vsce only (~15s)
 #   .\deploy\01-build-extension\build-windows.ps1 -ShowOutput    # verbose npm output
+#   .\deploy\01-build-extension\build-windows.ps1 -NoInstall     # khong hoi/install (CI, background, tail -f)
 #   .\deploy\01-build-extension\build-windows.ps1 -Registry "https://registry.npmjs.org/"
+#
+# Non-interactive: dat `-NoInstall` hoac pipe stdin ("n" | .\build-windows.ps1).
+# Neu stdin bi redirect ma khong co -NoInstall, script tu bo prompt, khong treo.
 param(
     [string]$Target     = "win32-x64",
     [switch]$SkipPackages,
     [switch]$OnlyExt,
     [switch]$ShowOutput,
+    [switch]$NoInstall,           # never prompt/install (CI, background, piped log)
     [string]$Registry   = ""
 )
 
@@ -39,14 +44,24 @@ function Invoke-Cmd {
     if ($Label -eq "") { $Label = $CmdStr.Split(" ")[0] }
     Write-Info "[$Label] $CmdStr"
     Push-Location $WorkDir
+    # $ErrorActionPreference = "Stop" + `2>&1` makes PowerShell wrap every line a
+    # native command writes to stderr into an ErrorRecord. Tools legitimately use
+    # stderr for warnings (vite/Browserslist "caniuse-lite is old", npm notices,
+    # tsc watch messages), which would abort a successful build. Success is decided
+    # by $LASTEXITCODE below, so stderr must stay a plain data stream here.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     try {
         if ($ShowOutput) { Invoke-Expression $CmdStr }
         else {
             $out = Invoke-Expression "$CmdStr 2>&1"
             $out | Select-Object -Last $Tail | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray }
         }
-        if ($LASTEXITCODE -ne 0) { throw "Exit $LASTEXITCODE" }
-    } finally { Pop-Location }
+        if ($LASTEXITCODE -ne 0) { throw "$Label failed (exit $LASTEXITCODE)" }
+    } finally {
+        $ErrorActionPreference = $prevEap
+        Pop-Location
+    }
 }
 
 Write-Host ""
@@ -59,6 +74,9 @@ Write-Host "================================================" -ForegroundColor W
 
 # --- Step 1: Resolve Node.js runtime ---
 Write-Step "Resolving Node.js runtime..."
+# conda writes to stderr even on success - keep it a data stream (see Invoke-Cmd).
+$prevEap = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $UseCondaNode = $false
 $condaEnvList = (conda env list 2>&1) | Out-String
 if ($condaEnvList -match "node20") {
@@ -70,6 +88,7 @@ if ($condaEnvList -match "node20") {
 }
 if (-not $UseCondaNode) {
     $sysVer = node --version 2>&1
+    $ErrorActionPreference = $prevEap
     if ($LASTEXITCODE -ne 0) {
         Write-Err "Node.js not found. Run: conda create -n node20 -y nodejs=20"
     }
@@ -77,15 +96,16 @@ if (-not $UseCondaNode) {
     if ($sysMajor -ne "20") { Write-Warn "System Node $sysVer - expected v20.x" }
     Write-Ok "Using system Node: $sysVer"
 }
+$ErrorActionPreference = $prevEap
 
 function npm-run {
     param([string]$NpmCmd, [string]$WorkDir, [string]$Label)
-    if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 npm $NpmCmd" $WorkDir $Label }
+    if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 --no-capture-output npm $NpmCmd" $WorkDir $Label }
     else               { Invoke-Cmd "npm $NpmCmd" $WorkDir $Label }
 }
 function npx-run {
     param([string]$NpxCmd, [string]$WorkDir, [string]$Label)
-    if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 npx $NpxCmd" $WorkDir $Label }
+    if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 --no-capture-output npx $NpxCmd" $WorkDir $Label }
     else               { Invoke-Cmd "npx $NpxCmd" $WorkDir $Label }
 }
 function node-run {
@@ -93,7 +113,10 @@ function node-run {
     $saved = if ($EnvVar -ne "") { $EnvVar.Split("=",2) } else { $null }
     if ($saved) { [System.Environment]::SetEnvironmentVariable($saved[0], $saved[1]) }
     try {
-        if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 node $NodeCmd" $WorkDir $Label 10 }
+        # --no-capture-output: conda run forwards child stdout/stderr & exit code directly.
+        # Without it, conda buffers output and can return a non-zero exit code even when
+        # the node script succeeds (any stderr write confuses the wrapper).
+        if ($UseCondaNode) { Invoke-Cmd "conda run -n node20 --no-capture-output node $NodeCmd" $WorkDir $Label 10 }
         else               { Invoke-Cmd "node $NodeCmd" $WorkDir $Label 10 }
     } finally {
         if ($saved) { [System.Environment]::SetEnvironmentVariable($saved[0], $null) }
@@ -109,11 +132,14 @@ if ($Registry -ne "") {
 } elseif ($env:NPM_REGISTRY) {
     $NpmRegistry = $env:NPM_REGISTRY; Write-Ok "Using env NPM_REGISTRY: $NpmRegistry"
 } else {
+    # UU TIEN TUYET DOI Nexus local. Timeout 10s (khong phai 3s) vi Nexus cold-start
+    # hoac lan dau proxy package co the cham hon 3s -> de tranh vo tinh fallback
+    # sang npmjs khi Nexus van con song.
     try {
-        Invoke-WebRequest -Uri $NexusUrl -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop | Out-Null
+        Invoke-WebRequest -Uri $NexusUrl -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop | Out-Null
         $NpmRegistry = $NexusUrl; Write-Ok "Nexus available: $NpmRegistry"
     } catch {
-        $NpmRegistry = $PublicUrl; Write-Warn "Nexus not available - using public: $NpmRegistry"
+        $NpmRegistry = $PublicUrl; Write-Warn "Nexus khong voi toi (timeout 10s) - fallback public: $NpmRegistry"
     }
 }
 
@@ -122,15 +148,36 @@ function npm-install {
     $cmd = "npm install --registry `"$NpmRegistry`" $ExtraArgs".Trim()
     Write-Info "[$Label] $cmd"
     Push-Location $WorkDir
+    # See Invoke-Cmd: npm writes warnings to stderr, which "Stop" + `2>&1` turns
+    # into terminating errors. Judge success by exit code + real "npm error" lines.
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
     try {
         $out = Invoke-Expression "$cmd 2>&1"
         if ($ShowOutput) { $out | Write-Host }
         else { $out | Select-Object -Last 4 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray } }
         # ERESOLVE is a warning, not fatal error
         $realErr = $out | Where-Object { $_ -match "^npm error " -and $_ -notmatch "ERESOLVE" }
+        # UU TIEN NEXUS TRIET DE: neu dang dung Nexus ma npm fail (Nexus chet giua
+        # chung / timeout proxy), thu LAI QUA NEXUS once truoc khi bo cuoc. Khong
+        # im lang roi Nexus - loi phai duoc bao ro rang de fix Nexus, khong phai build lot.
+        if ($LASTEXITCODE -ne 0 -and $NpmRegistry -eq $NexusUrl) {
+            Write-Warn "[$Label] npm fail qua Nexus - thu lai qua Nexus lan 2..."
+            $out = Invoke-Expression "$cmd 2>&1"
+            if ($ShowOutput) { $out | Write-Host }
+            else { $out | Select-Object -Last 4 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray } }
+            $realErr = $out | Where-Object { $_ -match "^npm error " -and $_ -notmatch "ERESOLVE" }
+            if ($LASTEXITCODE -ne 0) {
+                throw "npm install qua Nexus that bai (sau 2 lan thu). Kiem tra Nexus: $NexusUrl. Loi: $($realErr -join '; ')"
+            }
+        }
         if ($LASTEXITCODE -ne 0 -and $realErr) { throw "npm install failed: $($realErr -join '; ')" }
+        if ($LASTEXITCODE -ne 0) { throw "$Label failed (exit $LASTEXITCODE)" }
         Write-Ok "$Label done"
-    } finally { Pop-Location }
+    } finally {
+        $ErrorActionPreference = $prevEap
+        Pop-Location
+    }
 }
 
 # --- Step 3: npm install all (skip if node_modules already present) ---
@@ -239,6 +286,43 @@ Write-Host "  $($vsix.Name)"
 Write-Host "  $sizeMB MB"
 Write-Host "================================================" -ForegroundColor Green
 Write-Host ""
-Write-Host "Install command:" -ForegroundColor White
-Write-Host "  code --install-extension '$($vsix.FullName)' --force" -ForegroundColor Gray
+
+# Determine the correct code CLI path
+$codeCli = "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd"
+if (-not (Test-Path $codeCli)) { $codeCli = "code" }
+
+Write-Host "Install (PowerShell 7 / pwsh):" -ForegroundColor White
+Write-Host "  cmd /c `"$codeCli`" --install-extension `"$($vsix.FullName)`" --force" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Install (CMD):" -ForegroundColor White
+Write-Host "  `"$codeCli`" --install-extension `"$($vsix.FullName)`" --force" -ForegroundColor Cyan
+Write-Host ""
+
+# Non-interactive modes must never block on Read-Host: a background run, a
+# redirected log, or `tail -f` leaves nobody to answer the prompt.
+# -NoInstall or redirected stdin skips the prompt; the install command above
+# is always printed so it can be run manually.
+
+if ($NoInstall) {
+    Write-Host "[INFO]  -NoInstall: bo qua buoc cai dat." -ForegroundColor Gray
+    Write-Host "  Chay lenh install o tren khi ban san sang." -ForegroundColor Gray
+} elseif (-not [Console]::IsInputRedirected) {
+    Write-Host "Auto-install now? (y/N)" -ForegroundColor Yellow -NoNewline
+    $answer = Read-Host " "
+    if ($answer -match "^[yY]$") {
+        Write-Host "Installing..." -ForegroundColor Cyan
+        $proc = Start-Process -FilePath "cmd.exe" `
+            -ArgumentList "/c `"`"$codeCli`" --install-extension `"$($vsix.FullName)`" --force`"" `
+            -Wait -PassThru -NoNewWindow
+        if ($proc.ExitCode -eq 0) {
+            Write-Host "[OK]    Installed successfully — reload VSCode (Ctrl+Shift+P → Developer: Reload Window)" -ForegroundColor Green
+        } else {
+            Write-Host "[WARN]  Install exited $($proc.ExitCode) — try the CMD command above manually" -ForegroundColor Yellow
+        }
+    } else {
+        Write-Host "  Run the Install command above in CMD to install." -ForegroundColor Gray
+    }
+} else {
+    Write-Host "[INFO]  stdin is redirected - khong hoi install. Dung -NoInstall hoac chay lenh install o tren." -ForegroundColor Gray
+}
 Write-Host ""

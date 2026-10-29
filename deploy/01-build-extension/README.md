@@ -179,6 +179,11 @@ bash deploy/01-build-extension/build-linux.sh --target linux-x64 --only-ext
 | --skip-packages |    ~42s     |     ~50s      |    ~50s     |
 | --only-ext      |   ~12-14s   |    ~15-20s    |   ~15-20s   |
 
+> ⚠️ Bảng trên đo trên **filesystem local** (macOS arm64). Trên Windows 11 với repo ở
+> `/mnt/e` (WSL 9P), v2.2.1 đo được: **full ~8m**, `-SkipPackages` ~5m,
+> `-OnlyExt -SkipPackages` ~2m45s. 9P chậm hơn ext4 nhiều lần, và `conda run` thêm độ trễ
+> khởi tạo cho mỗi lời gọi npm. Chi tiết: [Patch 12](../../.patches/12-windows-build-pipeline-fix.md).
+
 ---
 
 ## Kiến trúc build (chi tiết kỹ thuật)
@@ -309,6 +314,7 @@ grep -c "rejectUnauthorized"      packages/fetch/src/getAgentOptions.ts       # 
 | -------------------- | ------------------------------------------------------------------- |
 | `00-pre-install.sh`  | Pre-install native deps — bash (Linux/WSL/macOS), registry fallback |
 | `00-pre-install.ps1` | Pre-install native deps — PowerShell (Windows), registry fallback   |
+| `sync-npmrc.ps1`     | Sinh `~/.npmrc` cho npm offline — Nexus là upstream proxy      |
 | `build-linux.sh`     | Build script cho Linux/WSL (dùng conda node20)                      |
 | `build-macos.sh`     | Build script cho macOS (conda hoặc system node, OneDrive detection) |
 | `build-windows.ps1`  | Build script cho Windows (PowerShell)                               |

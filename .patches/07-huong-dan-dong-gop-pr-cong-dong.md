@@ -13,6 +13,7 @@
 3. [Viết patch đúng cách](#3-viết-patch-đúng-cách)
 4. [Tạo PR trên GitHub](#4-tạo-pr-trên-github)
 5. [Xử lý CI checks và CLA](#5-xử-lý-ci-checks-và-cla)
+   - 5.7. Xử lý flaky test và re-run CI
 6. [Làm việc với maintainer](#6-làm-việc-với-maintainer)
 7. [Các lỗi thường gặp và cách tránh](#7-các-lỗi-thường-gặp-và-cách-tránh)
 8. [Quick Reference](#8-quick-reference)
@@ -392,6 +393,110 @@ Could you confirm if these are pre-existing flaky tests or re-run the CI?
 Thanks!
 ```
 
+### 5.7. Xử lý flaky test và re-run CI (trường hợp thực tế PR #13131)
+
+Đây là bài học thực tế khi xử lý `jetbrains-tests` flaky trên PR #13131
+(fix GUI button overflow).
+
+#### Nhận diện flaky test
+
+**Dấu hiệu flaky:** Cùng một commit, chạy nhiều lần cho kết quả khác nhau.
+
+```bash
+# Liệt kê tất cả workflow runs của cùng một commit
+gh run list --repo continuedev/continue --commit <HEAD_SHA> \
+  --json databaseId,conclusion,createdAt,displayTitle
+```
+
+**Ví dụ thực tế (PR #13131, commit `f42ae5cb`):**
+
+| Run ID | Time | Kết quả |
+|--------|------|---------|
+| 31763205205 | 02:26 | ❌ FAILURE |
+| 33824346191 | 01:04 | ✅ SUCCESS |
+| 3382444116 | 01:06 | ✅ SUCCESS |
+
+→ Cùng commit, 1 fail 2 pass = **flaky test**, không phải lỗi code.
+
+#### Xác định chính xác test nào fail
+
+```bash
+# Lấy job ID của job fail
+gh run view <RUN_ID> --repo continuedev/continue --json jobs \
+  --jq '.jobs[] | select(.name == "jetbrains-tests") | .databaseId'
+
+# Xem log, grep các dòng lỗi
+gh run view --repo continuedev/continue --job <JOB_ID> --log 2>&1 \
+  | grep -iE "FAILED|failed|error|assert|BUILD FAILED"
+```
+
+**Ví dụ output (PR #13131):**
+```
+Autocomplete > testAutocomplete() FAILED
+    com.intellij.ide.starter.driver.engine.DriverWithContextError at Autocomplete.kt:24
+        Caused by: org.opentest4j.AssertionFailedError at Autocomplete.kt:42
+1 test completed, 1 failed
+> Task :testIntegration FAILED
+BUILD FAILED in 4m 19s
+```
+
+**Phân tích:** Lỗi ở `Autocomplete.kt:42` (JetBrains plugin Kotlin test) —
+hoàn toàn không liên quan đến 6 file GUI VS Code mà PR sửa. → Xác nhận flaky.
+
+#### Các phương án re-run CI
+
+| # | Phương án | Lệnh | Quyền cần | Ghi chú |
+|---|-----------|------|-----------|---------|
+| 1 | **Empty commit** (khuyến nghị) | `git commit --allow-empty` + push | Contributor (owner branch) | Trigger CI chạy lại toàn bộ |
+| 2 | `/rerun` comment | Comment `/rerun` trên PR | Contributor | Không chắc bot hỗ trợ |
+| 3 | `gh run rerun` | `gh run rerun <RUN_ID> --failed` | **Admin repo** | ❌ Contributor thường bị reject |
+| 4 | Chờ maintainer | Ping + chờ | Contributor | Không chủ động |
+
+**⚠️ `gh run rerun` cần admin rights** — contributor thường gặp lỗi:
+```
+run <RUN_ID> cannot be rerun; Must have admin rights to Repository.
+```
+
+#### Phương án 1: Empty commit (khuyến nghị, đã dùng thành công)
+
+```bash
+# 1. Checkout branch của PR
+git checkout fix/toolbar-button-overflow
+
+# 2. Tạo empty commit (không thay đổi code)
+git commit --allow-empty -m "chore: trigger CI re-run (jetbrains-tests flaky)"
+
+# 3. Push — CI tự động chạy lại với commit mới
+git push origin fix/toolbar-button-overflow
+```
+
+**Ưu điểm:**
+- ✅ Chủ động, không cần chờ maintainer
+- ✅ Không cần admin rights
+- ✅ Test flaky nhiều khả năng pass ở lần chạy mới
+
+**Nhược điểm:**
+- ⚠️ Thêm 1 commit vô nghĩa vào PR (chấp nhận được, message rõ ràng)
+
+**Verify CI đã trigger:**
+```bash
+# Chờ ~1-2 phút, kiểm tra run mới với commit mới
+gh run list --repo continuedev/continue --commit <NEW_HEAD_SHA> \
+  --json databaseId,conclusion,status,createdAt
+```
+
+#### Khi nào NÊN dùng empty commit
+
+- ✅ Test flaky (cùng commit có run pass)
+- ✅ CI fail không liên quan đến code bạn
+- ✅ Bạn là owner branch (có quyền push)
+
+#### Khi nào KHÔNG nên dùng empty commit
+
+- ❌ CI fail do code bạn (phải fix thật, không phải re-run)
+- ❌ Bạn không có quyền push vào branch
+- ❌ PR đã gần merge (tránh thêm commit gây nhiễu)
+
 ---
 
 ## 6. Làm việc với maintainer
@@ -543,6 +648,42 @@ git push origin <branch-name>
 # Không bao giờ: git push upstream
 ```
 
+### Lỗi 7: Checkout branch PR làm "biến mất" folder `.patches`
+
+**Triệu chứng:** Đang làm việc trên branch `develop`/`feature/*` (có folder `.patches`),
+checkout sang branch PR (tạo từ `upstream/main`) → folder `.patches` biến mất,
+`ls .patches/` báo "No such file or directory".
+
+**Nguyên nhân:** Folder `.patches` **chỉ tồn tại trên branch custom**
+(`develop`, `feature/*`) — chứa tài liệu internal của bạn.
+Branch PR được tạo từ `upstream/main` (sạch, không có `.patches`)
+theo đúng nguyên tắc "1 PR = 1 vấn đề, không chứa custom patches".
+
+Đây là **hành động bình thường của git**, không phải lỗi.
+
+**Fix:**
+```bash
+# Muốn edit tài liệu trong .patches → checkout branch custom
+git checkout develop
+
+# Muốn làm việc với code PR → checkout branch PR
+git checkout fix/toolbar-button-overflow
+# (lúc này .patches không có — đúng như thiết kế)
+```
+
+**Quy tắc:**
+- Edit `.patches/*.md` (tài liệu internal) → làm trên `develop` hoặc `feature/*`
+- Edit code cho PR → làm trên branch PR (từ `upstream/main`)
+- **KHÔNG** commit `.patches` vào branch PR (tránh đưa tài liệu internal lên upstream)
+
+**Verify branch nào có `.patches`:**
+```bash
+for b in develop feature/202608.remote-ssh main; do
+  echo -n "$b: "
+  git ls-tree -d $b .patches 2>/dev/null | grep -q patches && echo "YES" || echo "no"
+done
+```
+
 ---
 
 ## 8. Quick Reference
@@ -598,13 +739,14 @@ git push -u origin fix/ten-van-de
 [ ] Không commit node_modules, *.vsix, build artifacts
 ```
 
-### Anatomy của 3 PR thực tế
+### Anatomy của 4 PR thực tế
 
 | PR | Branch | File thay đổi | Type |
 |----|--------|---------------|------|
 | [#13091](https://github.com/continuedev/continue/pull/13091) | `fix/empty-response-retry` | `packages/openai-adapters/src/apis/OpenAI.ts` | Bug fix NIM/vLLM empty response |
 | [#13092](https://github.com/continuedev/continue/pull/13092) | `fix/sanitize-tool-arguments` | `core/llm/openaiTypeConverters.ts` | Bug fix malformed JSON tool args |
 | [#13093](https://github.com/continuedev/continue/pull/13093) | `feat/always-on-context-usage` | GUI components | Feature context usage display |
+| [#13131](https://github.com/continuedev/continue/pull/13131) | `fix/toolbar-button-overflow` | 6 GUI files (CSS/Tailwind) | Bug fix Accept/Reject buttons clipped |
 
 ---
 

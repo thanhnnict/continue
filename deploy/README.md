@@ -11,6 +11,7 @@ deploy/
 ├── 01-build-extension/           Build VSIX từ source (Linux/WSL, Windows, macOS)
 │   ├── 00-pre-install.sh         Pre-install native deps (bash, registry fallback)
 │   ├── 00-pre-install.ps1        Pre-install native deps (PowerShell, registry fallback)
+│   ├── sync-npmrc.ps1            Sinh ~/.npmrc cho npm offline (xem Patch 12)
 │   ├── build-linux.sh            Build trên Linux/WSL (conda node20)
 │   ├── build-macos.sh            Build trên macOS (conda hoặc system node)
 │   ├── build-windows.ps1         Build trên Windows (PowerShell)
@@ -105,6 +106,9 @@ bash deploy/01-build-extension/build-linux.sh --target win32-x64
 ### Windows (PowerShell)
 
 ```powershell
+# Sinh ~/.npmrc truoc (npm phai di THANG toi Nexus, khong qua corporate proxy)
+.\deploy\01-build-extension\sync-npmrc.ps1
+
 # Pre-install (auto-detect Nexus/public registry)
 .\deploy\01-build-extension\00-pre-install.ps1
 
@@ -113,6 +117,9 @@ bash deploy/01-build-extension/build-linux.sh --target win32-x64
 
 # Quick rebuild
 .\deploy\01-build-extension\build-windows.ps1 -OnlyExt
+
+# Build nen / redirect log (khong hoi install)
+.\deploy\01-build-extension\build-windows.ps1 -NoInstall
 ```
 
 ---
@@ -164,10 +171,24 @@ source ~/.bashrc && code-wsl .
 ## Build time tham chiếu
 
 | Platform      | Full build | --skip-packages | --only-ext |
-| ------------- | :--------: | :-------------: | :--------: |
+| ------------- | :--------: | :-------------: |  :------:  |
 | macOS arm64   |    ~50s    |      ~42s       |  ~12-14s   |
 | Linux/WSL x64 |  ~60-90s   |      ~50s       |  ~15-20s   |
 | Windows x64   |  ~60-90s   |      ~50s       |  ~15-20s   |
+
+> ⚠️ **Các con số trên đo trên filesystem local (macOS arm64).**
+> Đo thực tế trên Windows 11 với repo nằm ở `/mnt/e` (WSL 9P filesystem),
+> commit `e2b3dff4b` / v2.2.1:
+>
+> | Mode | Thời gian |
+> | ---- | :-------: |
+> | Full build | **~8m** |
+> | `-SkipPackages` | **~5m** |
+> | `-OnlyExt -SkipPackages` | **~2m45s** |
+>
+> Hai nguyên nhân chậm: 9P filesystem chậm hơn ext4 nhiều lần, và `conda run` cộng
+> thêm độ trễ khởi tạo môi trường cho **mỗi** lời gọi npm.
+> VSIX Windows 2.2.1 cũng nặng hơn mức "~70-80 MB" ở trên: **106 MB / 398 files**.
 
 ---
 
@@ -178,7 +199,7 @@ source ~/.bashrc && code-wsl .
 | Version          | `1.132.0`                                |
 | Commit           | `df53daabb1`                             |
 | Date             | `2026-08-04`                             |
-| Custom extension | `2.1.1` (branch `release/v2.1.x-onprem`) |
+| Custom extension | `2.2.1` (branch `develop`)               |
 
 ---
 

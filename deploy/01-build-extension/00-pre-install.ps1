@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # 00-pre-install.ps1 — Pre-install native dependencies cho build Windows
 #
 # Vấn đề: Khi node_modules chưa đầy đủ hoặc cần refresh platform binaries.
@@ -71,15 +71,17 @@ function Detect-NpmRegistry {
     return
   }
 
-  # Auto-detect: try Nexus first
-  Write-Info "Auto-detecting npm registry..."
+  # Auto-detect: UU TIEN TUYET DOI Nexus local. Timeout 10s (khong phai 3s) vi
+  # Nexus cold-start hoac lan dau proxy package co the cham hon 3s, de tranh vo
+  # tinh fallback sang npmjs khi Nexus van con song.
+  Write-Info "Auto-detecting npm registry (uu tien Nexus)..."
   try {
-    $response = Invoke-WebRequest -Uri $NexusRegistry -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
+    $response = Invoke-WebRequest -Uri $NexusRegistry -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
     $script:NpmRegistry = $NexusRegistry
     Write-Ok "Nexus internal registry available: $script:NpmRegistry"
   } catch {
     $script:NpmRegistry = $PublicRegistry
-    Write-Warn "Nexus not available - falling back to public registry: $script:NpmRegistry"
+    Write-Warn "Nexus khong voi toi (timeout 10s) - fallback public: $script:NpmRegistry"
   }
 }
 
@@ -103,15 +105,28 @@ function Invoke-NpmWithFallback {
     $output | Select-Object -Last 4 | Write-Host
     if ($LASTEXITCODE -ne 0) { throw "npm failed with exit code $LASTEXITCODE" }
   } catch {
+    # UU TIEN NEXUS TRIET DE: neu dang dung Nexus ma fail (Nexus chet giua chung /
+    # timeout proxy), THU LAI QUA NEXUS once. Chi khi van fail moi roi sang public,
+    # va in canh bao ro de user biet prod build dang ra ngoai internet.
     if ($NpmRegistry -ne $PublicRegistry) {
-      Write-Warn "Failed with $NpmRegistry - retrying with public registry..."
-      $script:NpmRegistry = $PublicRegistry
-      $fullCmd = "npm $NpmArgs --registry `"$PublicRegistry`""
+      Write-Warn "npm fail qua $NpmRegistry - thu lai qua Nexus lan 2..."
+      $fullCmd = "npm $NpmArgs --registry `"$NpmRegistry`""
       $output = Invoke-Expression $fullCmd 2>&1
       $output | Select-Object -Last 4 | Write-Host
-      if ($LASTEXITCODE -ne 0) {
-        Pop-Location
-        Write-Err "npm command failed even with public registry"
+      if ($LASTEXITCODE -eq 0) {
+        Write-Ok "Retry qua Nexus thanh cong"
+      } else {
+        Write-Warn "Van fail sau 2 lan qua Nexus - fallback public registry..."
+        $script:NpmRegistry = $PublicRegistry
+        $fullCmd = "npm $NpmArgs --registry `"$PublicRegistry`""
+        $output = Invoke-Expression $fullCmd 2>&1
+        $output | Select-Object -Last 4 | Write-Host
+        if ($LASTEXITCODE -ne 0) {
+          Pop-Location
+          Write-Err "npm command failed even with public registry"
+        } else {
+          Write-Warn "CAINH: build dang dung PUBLIC registry, KHONG phai Nexus. Prod nen fix Nexus roi build lai."
+        }
       }
     } else {
       Pop-Location

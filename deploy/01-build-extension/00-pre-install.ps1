@@ -1,4 +1,4 @@
-# =============================================================================
+﻿# =============================================================================
 # 00-pre-install.ps1 — Pre-install native dependencies cho build Windows
 #
 # Vấn đề: Khi node_modules chưa đầy đủ hoặc cần refresh platform binaries.

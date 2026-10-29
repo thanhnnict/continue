@@ -54,14 +54,16 @@ Write-Host "  Sync .npmrc - Nexus la upstream proxy" -ForegroundColor White
 Write-Host "================================================" -ForegroundColor White
 
 # --- Kiem tra Nexus song truoc khi ghi ---
+# Timeout 10s: Nexus cold-start / lan dau proxy co the cham hon 5s.
 Write-Info "Kiem tra Nexus: $Registry"
 $registryHost = ([System.Uri]$Registry).Host
 try {
-  Invoke-WebRequest -Uri $Registry -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
+  Invoke-WebRequest -Uri $Registry -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop | Out-Null
   Write-Ok "Nexus dang phuc vu"
 } catch {
-  Write-Warn "Khong voi toi Nexus ($Registry)."
+  Write-Warn "Khong voi toi Nexus ($Registry) sau 10s."
   Write-Warn "Noi mang? kiem tra container Nexus truoc khi build."
+  Write-Warn "File .npmrc van se ghi - khi Nexus song lai thi npm se dung Nexus."
 }
 
 # --- Sinh noi dung ---

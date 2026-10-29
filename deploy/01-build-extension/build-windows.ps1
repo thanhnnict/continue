@@ -132,11 +132,14 @@ if ($Registry -ne "") {
 } elseif ($env:NPM_REGISTRY) {
     $NpmRegistry = $env:NPM_REGISTRY; Write-Ok "Using env NPM_REGISTRY: $NpmRegistry"
 } else {
+    # UU TIEN TUYET DOI Nexus local. Timeout 10s (khong phai 3s) vi Nexus cold-start
+    # hoac lan dau proxy package co the cham hon 3s -> de tranh vo tinh fallback
+    # sang npmjs khi Nexus van con song.
     try {
-        Invoke-WebRequest -Uri $NexusUrl -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop | Out-Null
+        Invoke-WebRequest -Uri $NexusUrl -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop | Out-Null
         $NpmRegistry = $NexusUrl; Write-Ok "Nexus available: $NpmRegistry"
     } catch {
-        $NpmRegistry = $PublicUrl; Write-Warn "Nexus not available - using public: $NpmRegistry"
+        $NpmRegistry = $PublicUrl; Write-Warn "Nexus khong voi toi (timeout 10s) - fallback public: $NpmRegistry"
     }
 }
 
@@ -155,6 +158,19 @@ function npm-install {
         else { $out | Select-Object -Last 4 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray } }
         # ERESOLVE is a warning, not fatal error
         $realErr = $out | Where-Object { $_ -match "^npm error " -and $_ -notmatch "ERESOLVE" }
+        # UU TIEN NEXUS TRIET DE: neu dang dung Nexus ma npm fail (Nexus chet giua
+        # chung / timeout proxy), thu LAI QUA NEXUS once truoc khi bo cuoc. Khong
+        # im lang roi Nexus - loi phai duoc bao ro rang de fix Nexus, khong phai build lot.
+        if ($LASTEXITCODE -ne 0 -and $NpmRegistry -eq $NexusUrl) {
+            Write-Warn "[$Label] npm fail qua Nexus - thu lai qua Nexus lan 2..."
+            $out = Invoke-Expression "$cmd 2>&1"
+            if ($ShowOutput) { $out | Write-Host }
+            else { $out | Select-Object -Last 4 | ForEach-Object { Write-Host "    $_" -ForegroundColor Gray } }
+            $realErr = $out | Where-Object { $_ -match "^npm error " -and $_ -notmatch "ERESOLVE" }
+            if ($LASTEXITCODE -ne 0) {
+                throw "npm install qua Nexus that bai (sau 2 lan thu). Kiem tra Nexus: $NexusUrl. Loi: $($realErr -join '; ')"
+            }
+        }
         if ($LASTEXITCODE -ne 0 -and $realErr) { throw "npm install failed: $($realErr -join '; ')" }
         if ($LASTEXITCODE -ne 0) { throw "$Label failed (exit $LASTEXITCODE)" }
         Write-Ok "$Label done"

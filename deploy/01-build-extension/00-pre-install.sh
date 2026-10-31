@@ -166,26 +166,56 @@ check_file() {
 
 # =============================================================================
 # STEP 1: npm install trong extensions/vscode
+#
+# QUAN TRONG: npm install se PRUNE cac platform binary da install bang
+# --no-save (ripgrep-linux, lancedb-*-gnu, @esbuild/linux-x64) neu chung
+# khong phai dependency truc tiep cua package.json. Vi vay chi chay
+# npm install khi node_modules CHUA san — neu binaries platform da co thi
+# bo qua, de cac STEP 2/3/3c o sau (cai bang --no-save) khong bi xoa.
+#
+# Ngoai ra kiem tra sqlite3 binding platform: neu da co EXT_DIR/node_modules
+# nhung sqlite3 sai platform (Windows PE32 khi target=linux) thi van phai
+# chay npm install de dam bao node_modules fresh va symlinks dung path.
 # =============================================================================
-if [[ "$CHECK_ONLY" == "false" ]]; then
-  info "Running npm install in extensions/vscode (registry: $NPM_REGISTRY)..."
-  run_npm_cmd bash -c "
-    cd '${EXT_DIR}'
-    npm install --registry '${NPM_REGISTRY}' 2>&1 | tail -4
-  " || {
-    # Fallback: if Nexus failed mid-install, retry with public registry
-    if [[ "$NPM_REGISTRY" != "$PUBLIC_REGISTRY" ]]; then
-      warn "npm install failed with $NPM_REGISTRY — retrying with public registry..."
-      NPM_REGISTRY="$PUBLIC_REGISTRY"
-      run_npm_cmd bash -c "
-        cd '${EXT_DIR}'
-        npm install --registry '${NPM_REGISTRY}' 2>&1 | tail -4
-      "
-    else
-      error "npm install failed"
+
+# Check xem node_modules co valid khong (sqlite3 binding phai dung platform)
+_ext_nm_is_valid() {
+  [[ -d "${EXT_DIR}/node_modules" ]] || return 1
+  [[ -d "${EXT_DIR}/node_modules/@vscode/ripgrep" ]] || return 1
+  [[ -d "${EXT_DIR}/node_modules/esbuild" ]] || return 1
+  # Kiem tra sqlite3 binding neu target la linux
+  if [[ "$OS" == "linux" ]]; then
+    local sqlite_src="${REPO_ROOT}/core/node_modules/sqlite3/build/Release/node_sqlite3.node"
+    if [[ -f "$sqlite_src" ]] && ! file -b "$sqlite_src" 2>/dev/null | grep -q "ELF"; then
+      return 1  # sqlite3 sai platform -> can fresh install
     fi
-  }
-  success "npm install done"
+  fi
+  return 0
+}
+
+if [[ "$CHECK_ONLY" == "false" ]]; then
+  if _ext_nm_is_valid; then
+    success "extensions/vscode/node_modules da ton tai va hop le — bo qua npm install (tranh prune platform binaries)"
+  else
+    info "Running npm install in extensions/vscode (registry: $NPM_REGISTRY)..."
+    run_npm_cmd bash -c "
+      cd '${EXT_DIR}'
+      npm install --registry '${NPM_REGISTRY}' 2>&1 | tail -4
+    " || {
+      # Fallback: if Nexus failed mid-install, retry with public registry
+      if [[ "$NPM_REGISTRY" != "$PUBLIC_REGISTRY" ]]; then
+        warn "npm install failed with $NPM_REGISTRY — retrying with public registry..."
+        NPM_REGISTRY="$PUBLIC_REGISTRY"
+        run_npm_cmd bash -c "
+          cd '${EXT_DIR}'
+          npm install --registry '${NPM_REGISTRY}' 2>&1 | tail -4
+        "
+      else
+        error "npm install failed"
+      fi
+    }
+    success "npm install done"
+  fi
 fi
 
 # =============================================================================
@@ -205,13 +235,13 @@ if [[ ! -f "$RIPGREP_BIN" ]]; then
     info "Installing $RIPGREP_PKG..."
     run_npm_cmd bash -c "
       cd '${EXT_DIR}'
-      npm install '${RIPGREP_PKG}' --registry '${NPM_REGISTRY}' --no-save 2>&1 | tail -3
+      npm install '${RIPGREP_PKG}' --registry '${NPM_REGISTRY}' --no-save --no-package-lock 2>&1 | tail -3
     " || {
       if [[ "$NPM_REGISTRY" != "$PUBLIC_REGISTRY" ]]; then
         warn "Failed with $NPM_REGISTRY — retrying with public registry..."
         run_npm_cmd bash -c "
           cd '${EXT_DIR}'
-          npm install '${RIPGREP_PKG}' --registry '${PUBLIC_REGISTRY}' --no-save 2>&1 | tail -3
+          npm install '${RIPGREP_PKG}' --registry '${PUBLIC_REGISTRY}' --no-save --no-package-lock 2>&1 | tail -3
         "
       else
         error "Failed to install $RIPGREP_PKG"
@@ -254,13 +284,13 @@ if [[ ! -f "$LANCEDB_NODE" ]]; then
     info "Installing $LANCEDB_PKG..."
     run_npm_cmd bash -c "
       cd '${EXT_DIR}'
-      npm install '${LANCEDB_PKG}' --registry '${NPM_REGISTRY}' --no-save 2>&1 | tail -3
+      npm install '${LANCEDB_PKG}' --registry '${NPM_REGISTRY}' --no-save --no-package-lock 2>&1 | tail -3
     " || {
       if [[ "$NPM_REGISTRY" != "$PUBLIC_REGISTRY" ]]; then
         warn "Failed with $NPM_REGISTRY — retrying with public registry..."
         run_npm_cmd bash -c "
           cd '${EXT_DIR}'
-          npm install '${LANCEDB_PKG}' --registry '${PUBLIC_REGISTRY}' --no-save 2>&1 | tail -3
+          npm install '${LANCEDB_PKG}' --registry '${PUBLIC_REGISTRY}' --no-save --no-package-lock 2>&1 | tail -3
         "
       else
         error "Failed to install $LANCEDB_PKG"
@@ -316,6 +346,18 @@ else
 
   if [[ ! -d "$CORE_SQLITE" ]]; then
     error "core/node_modules/sqlite3 chưa tồn tại. Chạy: (cd core && npm install)"
+  fi
+
+  # Kiem tra build tools (gcc/g++/make) — bat buoc cho node-gyp
+  if [[ "$OS" == "linux" ]]; then
+    MISSING_TOOLS=()
+    for tool in gcc g++ make; do
+      command -v "$tool" &>/dev/null || MISSING_TOOLS+=("$tool")
+    done
+    if [[ ${#MISSING_TOOLS[@]} -gt 0 ]]; then
+      error "Build tools missing: ${MISSING_TOOLS[*]}\n  Fix: sudo apt install -y build-essential\n  Or:  sudo yum install -y gcc gcc-c++ make"
+    fi
+    success "Build tools present (gcc/g++/make)"
   fi
 
   NODE_VER_NUM=$($NODE_PREFIX node --version 2>/dev/null | sed 's/^v//' || node --version | sed 's/^v//')
@@ -521,7 +563,8 @@ else
   for ws in "${ESBUILD_WORKSPACES[@]}"; do
     esb_dir="${REPO_ROOT}/${ws}/node_modules/esbuild"
     esb_target_bin="${REPO_ROOT}/${ws}/node_modules/@esbuild/${OS}-${ARCH}"
-    esb_target_exe="${esb_target_bin}/esbuild${EXE}"
+    # Binary nam trong bin/ (win32: bin/esbuild.exe, khac: bin/esbuild) — xem esbuild main.js
+    esb_target_exe="${esb_target_bin}/bin/esbuild${EXE}"
     esb_ver=$(grep '"version"' "${esb_dir}/package.json" 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
 
     need_install=false
@@ -546,13 +589,13 @@ else
     info "${ws}: cai @esbuild/${OS}-${ARCH}@${esb_ver}..."
     run_npm_cmd bash -c "
       cd '${REPO_ROOT}/${ws}'
-      npm install '${ESBUILD_PKG}@${esb_ver}' --registry '${NPM_REGISTRY}' --no-save --force 2>&1 | tail -3
+      npm install '${ESBUILD_PKG}@${esb_ver}' --registry '${NPM_REGISTRY}' --no-save --no-package-lock --force 2>&1 | tail -3
     " || {
       if [[ "$NPM_REGISTRY" != "$PUBLIC_REGISTRY" ]]; then
         warn "Failed with $NPM_REGISTRY — retrying with public registry..."
         run_npm_cmd bash -c "
           cd '${REPO_ROOT}/${ws}'
-          npm install '${ESBUILD_PKG}@${esb_ver}' --registry '${PUBLIC_REGISTRY}' --no-save --force 2>&1 | tail -3
+          npm install '${ESBUILD_PKG}@${esb_ver}' --registry '${PUBLIC_REGISTRY}' --no-save --no-package-lock --force 2>&1 | tail -3
         " || error "Khong cai duoc ${ESBUILD_PKG}@${esb_ver} cho ${ws}"
       else
         error "Khong cai duoc ${ESBUILD_PKG}@${esb_ver} cho ${ws}"
